@@ -110,6 +110,10 @@ function render() {
 
   hydrateRouteMaps();
   hydrateRouteParking();
+
+  if (!document.body.classList.contains("app-ready")) {
+    requestAnimationFrame(() => document.body.classList.add("app-ready"));
+  }
 }
 
 function renderHome(alertCount) {
@@ -131,38 +135,46 @@ function renderHome(alertCount) {
 
 function renderGenerationStatus() {
   if (generationBusy) {
+    const steps = ["관광 정보 수집", "주변 맛집·카페 매칭", "이동 동선·주차 점검", "타임테이블 구성"];
     return `
       <section class="generation-panel busy" aria-live="polite">
-        <div class="agent-loading-layout">
-          <div class="agent-loading-copy">
-            <p class="eyebrow">Ennoia Agent</p>
-            <h2>AI 여행 설계 중</h2>
-            <p>관광지, 맛집, 이동 동선을 확인하고 있습니다.</p>
+        <div class="gen-orbs" aria-hidden="true">
+          <span class="gen-orb a"></span>
+          <span class="gen-orb b"></span>
+          <span class="gen-orb c"></span>
+        </div>
+        <div class="gen-busy-inner">
+          <div class="gen-busy-copy">
+            <span class="gen-chip"><span class="gen-chip-dot"></span>Ennoia AI</span>
+            <h2>여행 일정을 짓는 중이에요</h2>
+            <p>관광지와 맛집, 이동 동선을 모아 가장 자연스러운 하루를 구성하고 있어요.</p>
+            <ul class="gen-track" aria-label="일정 생성 진행 단계">
+              ${steps
+                .map(
+                  (label, index) => `
+                    <li style="--i: ${index}">
+                      <span class="gen-track-dot" aria-hidden="true"></span>
+                      ${escapeHtml(label)}
+                    </li>
+                  `
+                )
+                .join("")}
+            </ul>
+            <div class="gen-bar" aria-hidden="true"><span></span></div>
           </div>
-          <div class="agent-flow-visual" aria-hidden="true">
-            <span class="agent-map-line horizontal"></span>
-            <span class="agent-map-line diagonal-a"></span>
-            <span class="agent-map-line diagonal-b"></span>
-            <span class="agent-node kto">KTO</span>
-            <span class="agent-node local">Local</span>
-            <span class="agent-node route">Route</span>
-            <span class="agent-node plan">Plan</span>
-            <span class="agent-signal"></span>
+          <div class="gen-skeleton" aria-hidden="true">
+            ${[0, 1, 2]
+              .map(
+                () => `
+                  <div class="gen-skel-row">
+                    <span class="gen-skel-time"></span>
+                    <span class="gen-skel-lines"><i></i><i></i></span>
+                  </div>
+                `
+              )
+              .join("")}
           </div>
         </div>
-        <div class="agent-progress-track" aria-hidden="true"><span></span></div>
-        <ol class="agent-step-list" aria-label="일정 생성 진행 상태">
-          ${["KTO 관광정보 확인", "근처 맛집·카페 후보 탐색", "이동 동선·주차 연결 점검", "플래너 타임테이블 반영 준비"]
-            .map(
-              (label, index) => `
-                <li class="agent-step" style="--step-index: ${index}">
-                  <span class="agent-step-icon" aria-hidden="true">${String(index + 1).padStart(2, "0")}</span>
-                  <span class="agent-step-text">${label}</span>
-                </li>
-              `
-            )
-            .join("")}
-        </ol>
       </section>
     `;
   }
@@ -200,7 +212,7 @@ function renderDayTab(day, index) {
   const selected = day.date === activeDate;
   return `
     <button class="day-tab ${selected ? "active" : ""}" data-action="select-day" data-date="${day.date}" role="tab" aria-selected="${selected}">
-      <strong>Day ${index + 1}</strong>
+      <strong>Day ${String(index + 1).padStart(2, "0")}</strong>
       <span>${escapeHtml(formatDayLabel(day.date))}</span>
     </button>
   `;
@@ -494,7 +506,7 @@ function drawRouteMap(mapElement, route) {
   }).addTo(map);
   window.L.circleMarker(latLngs[latLngs.length - 1], {
     radius: 7,
-    color: "#17181c",
+    color: "#3c315b",
     weight: 3,
     fillColor: color,
     fillOpacity: 1
@@ -1042,12 +1054,12 @@ function routeMapProviderLabel(mode) {
 function routeColor(mode) {
   return (
     {
-      walk: "#14804a",
-      car: "#2563eb",
-      taxi: "#2563eb",
-      bus: "#7c3aed",
-      subway: "#7c3aed"
-    }[mode] || "#2563eb"
+      walk: "#2ec08b",
+      car: "#3c315b",
+      taxi: "#3c315b",
+      bus: "#ab9ff2",
+      subway: "#ab9ff2"
+    }[mode] || "#ab9ff2"
   );
 }
 

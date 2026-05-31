@@ -5,13 +5,13 @@ import test from "node:test";
 const mainSource = await readFile(new URL("../app/main.js", import.meta.url), "utf8");
 const stylesSource = await readFile(new URL("../app/styles.css", import.meta.url), "utf8");
 
-test("trip generation busy state shows agent progress stages", () => {
-  assert.match(mainSource, /AI 여행 설계 중/);
-  assert.match(mainSource, /관광지, 맛집, 이동 동선을 확인하고 있습니다\./);
-  assert.match(mainSource, /KTO 관광정보 확인/);
-  assert.match(mainSource, /근처 맛집·카페 후보 탐색/);
-  assert.match(mainSource, /이동 동선·주차 연결 점검/);
-  assert.match(mainSource, /플래너 타임테이블 반영 준비/);
+test("trip generation busy state shows progress stages", () => {
+  assert.match(mainSource, /여행 일정을 짓는 중이에요/);
+  assert.match(mainSource, /관광지와 맛집, 이동 동선을 모아/);
+  assert.match(mainSource, /관광 정보 수집/);
+  assert.match(mainSource, /주변 맛집·카페 매칭/);
+  assert.match(mainSource, /이동 동선·주차 점검/);
+  assert.match(mainSource, /타임테이블 구성/);
 });
 
 test("trip generation controls prevent duplicate submissions while busy", () => {
@@ -23,17 +23,20 @@ test("trip generation controls prevent duplicate submissions while busy", () => 
 
 test("loading animation respects reduced-motion users", () => {
   assert.match(stylesSource, /@media \(prefers-reduced-motion: reduce\)/);
-  assert.match(stylesSource, /agent-step/);
-  assert.match(stylesSource, /agent-signal/);
+  assert.match(stylesSource, /\.gen-orb/);
+  assert.match(stylesSource, /\.gen-bar span/);
   assert.match(stylesSource, /animation: none/);
 });
 
-test("trip generation busy state uses a dynamic ops visual instead of plain step cards", () => {
-  assert.match(mainSource, /agent-loading-layout/);
-  assert.match(mainSource, /agent-flow-visual/);
-  assert.match(mainSource, /agent-signal/);
-  assert.match(mainSource, /agent-progress-track/);
-  assert.match(stylesSource, /@keyframes agent-signal-travel/);
-  assert.match(stylesSource, /@keyframes agent-track-fill/);
-  assert.doesNotMatch(stylesSource, /@keyframes agent-step-shimmer[\s\S]*background-position/);
+test("trip generation busy state uses an ambient loader instead of plain step cards", () => {
+  // markup: drifting aurora orbs, sequential step track, gradient bar, shimmer skeleton
+  assert.match(mainSource, /gen-orbs/);
+  assert.match(mainSource, /class="gen-orb a"/);
+  assert.match(mainSource, /gen-track/);
+  assert.match(mainSource, /gen-bar/);
+  assert.match(mainSource, /gen-skeleton/);
+  // styles: the loader is actually animated
+  assert.match(stylesSource, /@keyframes orb-drift-a/);
+  assert.match(stylesSource, /@keyframes bar-slide/);
+  assert.match(stylesSource, /@keyframes shimmer/);
 });
