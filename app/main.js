@@ -36,11 +36,11 @@ function render() {
   app.innerHTML = `
     <header class="topbar">
       <div>
-        <p class="eyebrow">JUNGLE Compass</p>
-        <h1>여행 관제 플래너</h1>
+        <p class="eyebrow">CONTROL PLAN</p>
+        <h1>자동화 플래너</h1>
       </div>
       <div class="topbar-actions">
-        <button class="soft-button" data-action="open-trip">AI 일정 설계</button>
+        <button class="soft-button" data-action="open-trip" ${generationDisabledAttr()}>${generationActionLabel("AI 일정 설계")}</button>
         <button class="icon-button" data-action="refresh" aria-label="새로고침">↻</button>
       </div>
     </header>
@@ -122,7 +122,7 @@ function renderHome(alertCount) {
         <p>${escapeHtml(currentState.plan.region || "서울")} · ${escapeHtml(currentState.plan.travelers || "여행자")} · 알림 ${alertCount}개</p>
       </div>
       <div class="hero-actions">
-        <button class="primary large" data-action="open-trip">AI로 일정 설계하기</button>
+        <button class="primary large" data-action="open-trip" ${generationDisabledAttr()}>${generationActionLabel("AI로 일정 설계하기")}</button>
         <button class="soft-button large" data-action="inspect-all">현재 일정 점검</button>
       </div>
     </section>
@@ -132,13 +132,37 @@ function renderHome(alertCount) {
 function renderGenerationStatus() {
   if (generationBusy) {
     return `
-      <section class="generation-panel busy">
-        <div>
-          <p class="eyebrow">Ennoia Agent</p>
-          <h2>관광지, 맛집, 날씨 조건을 분석하는 중</h2>
-          <p>생성 결과가 오면 플래너에 바로 반영합니다.</p>
+      <section class="generation-panel busy" aria-live="polite">
+        <div class="agent-loading-layout">
+          <div class="agent-loading-copy">
+            <p class="eyebrow">Ennoia Agent</p>
+            <h2>AI 여행 설계 중</h2>
+            <p>관광지, 맛집, 이동 동선을 확인하고 있습니다.</p>
+          </div>
+          <div class="agent-flow-visual" aria-hidden="true">
+            <span class="agent-map-line horizontal"></span>
+            <span class="agent-map-line diagonal-a"></span>
+            <span class="agent-map-line diagonal-b"></span>
+            <span class="agent-node kto">KTO</span>
+            <span class="agent-node local">Local</span>
+            <span class="agent-node route">Route</span>
+            <span class="agent-node plan">Plan</span>
+            <span class="agent-signal"></span>
+          </div>
         </div>
-        <span class="loader" aria-label="분석 중"></span>
+        <div class="agent-progress-track" aria-hidden="true"><span></span></div>
+        <ol class="agent-step-list" aria-label="일정 생성 진행 상태">
+          ${["KTO 관광정보 확인", "근처 맛집·카페 후보 탐색", "이동 동선·주차 연결 점검", "플래너 타임테이블 반영 준비"]
+            .map(
+              (label, index) => `
+                <li class="agent-step" style="--step-index: ${index}">
+                  <span class="agent-step-icon" aria-hidden="true">${String(index + 1).padStart(2, "0")}</span>
+                  <span class="agent-step-text">${label}</span>
+                </li>
+              `
+            )
+            .join("")}
+        </ol>
       </section>
     `;
   }
@@ -638,7 +662,7 @@ function renderTripDialog() {
           <label>예산 <input name="budget" placeholder="예: 중간" /></label>
         </div>
         <label>피하고 싶은 것 <input name="avoid" placeholder="예: 긴 대기, 너무 긴 도보, 늦은 저녁" /></label>
-        <button class="primary full" type="submit">Ennoia로 일정 생성</button>
+        <button class="primary full" type="submit" ${generationDisabledAttr()}>${generationActionLabel("Ennoia로 일정 생성")}</button>
       </form>
     </dialog>
   `;
@@ -739,7 +763,7 @@ document.addEventListener("click", async (event) => {
 
   if (action === "refresh") await refresh();
   if (action === "close-dialog") button.closest("dialog")?.close();
-  if (action === "open-trip") document.querySelector("#tripDialog").showModal();
+  if (action === "open-trip" && !generationBusy) document.querySelector("#tripDialog").showModal();
   if (action === "select-day") {
     activeDate = button.dataset.date;
     render();
@@ -766,11 +790,13 @@ document.addEventListener("submit", async (event) => {
   const form = event.target;
 
   if (form.dataset.role === "trip-form") {
+    if (generationBusy) return;
     const body = Object.fromEntries(new FormData(form).entries());
     document.querySelector("#tripDialog").close();
     generationBusy = true;
     generationError = "";
     render();
+    scrollGenerationPanelIntoView();
     try {
       const result = await api("/api/trips/generate", { method: "POST", body });
       currentState = result.state;
@@ -810,6 +836,23 @@ document.addEventListener("submit", async (event) => {
     document.querySelector("#editDialog").close();
   }
 });
+
+function generationActionLabel(label) {
+  return generationBusy ? "생성 중..." : label;
+}
+
+function generationDisabledAttr() {
+  return generationBusy ? 'disabled aria-busy="true"' : "";
+}
+
+function scrollGenerationPanelIntoView() {
+  requestAnimationFrame(() => {
+    document.querySelector(".generation-panel.busy")?.scrollIntoView({
+      behavior: "smooth",
+      block: "center"
+    });
+  });
+}
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
