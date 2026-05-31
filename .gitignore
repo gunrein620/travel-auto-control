@@ -1,0 +1,6 @@
+data/*.json
+.DS_Store
+.env
+.env.*
+!.env.example
+.superpowers/

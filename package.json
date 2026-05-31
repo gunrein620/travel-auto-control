@@ -1,0 +1,10 @@
+{
+  "name": "prompton-travel-ops",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node server/index.js",
+    "test": "node --test tests/**/*.test.js"
+  }
+}
