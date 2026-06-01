@@ -7,6 +7,13 @@ let pendingDraft = null;
 let activeDate = null;
 let generationBusy = false;
 let generationError = "";
+let naturalEditBusy = false;
+let draftApplyBusy = false;
+let naturalEditError = "";
+let naturalEditText = "";
+let naturalAddText = "";
+let recentlyEditedItemId = null;
+let recentlyEditedTimer = null;
 const parkingCache = new Map();
 const routeSegmentCache = new Map();
 const routeGeometryCache = new Map();
@@ -94,16 +101,18 @@ function render() {
       </section>
     </main>
 
-    <form class="composer" data-role="natural-form">
+    <form class="composer" data-role="natural-form" aria-busy="${naturalEditBusy}">
       <label for="naturalText">자연어로 일정 수정</label>
       <div class="composer-row">
-        <input id="naturalText" name="naturalText" placeholder="예: 이따 저녁은 삼겹살로 바꾸고 플래너에 적용해줘" autocomplete="off" />
-        <button type="submit">보내기</button>
+        <input id="naturalText" name="naturalText" placeholder="예: 이따 저녁은 삼겹살로 바꾸고 플래너에 적용해줘" autocomplete="off" value="${escapeHtml(naturalEditText)}" ${naturalEditInputDisabledAttr()} />
+        <button type="submit" ${naturalEditDisabledAttr()}>${naturalEditSubmitLabel()}</button>
       </div>
-      <div class="draft-zone">${pendingDraft ? renderDraft(pendingDraft) : ""}</div>
+      ${naturalEditError ? `<p class="natural-error" role="alert">${escapeHtml(naturalEditError)}</p>` : ""}
+      <div class="draft-zone" aria-live="polite">${naturalEditBusy ? `<p class="draft pending"><span class="spinner" aria-hidden="true"></span>수정안 만드는 중...</p>` : pendingDraft ? renderDraft(pendingDraft) : ""}</div>
     </form>
 
     ${renderTripDialog()}
+    ${renderAddAgentDialog()}
     ${renderAddDialog()}
     ${renderEditDialog()}
   `;
@@ -231,8 +240,9 @@ function renderTimeline(items) {
 
 function renderItem(item, index) {
   const meta = statusMeta[item.status] || statusMeta.unchecked;
+  const editedClass = item.id === recentlyEditedItemId ? " just-edited" : "";
   return `
-    <article class="plan-item ${meta.tone}">
+    <article class="plan-item ${meta.tone}${editedClass}" data-item-id="${escapeHtml(item.id)}">
       <div class="time-rail">
         <span class="order">${String(index + 1).padStart(2, "0")}</span>
         <strong>${clock(item.startsAt)}</strong>
@@ -262,7 +272,7 @@ function renderRouteSegment(segment) {
   return `
     <article class="route-card ${segment.mode} ${segment.timingTone}" data-route-segment data-route-id="${escapeHtml(segment.id)}">
       <div class="route-rail">
-        <span class="route-icon" aria-hidden="true">${escapeHtml(routeIcon(segment.mode))}</span>
+        <span class="route-icon" aria-hidden="true">${routeIcon(segment.mode)}</span>
         <strong>${escapeHtml(segment.modeLabel)}</strong>
         <span>${escapeHtml(segment.timeLabel)}</span>
       </div>
@@ -614,17 +624,41 @@ function renderHistory(entry) {
 }
 
 function renderDraft(draft) {
-  const sourceLabel = draft.source === "ennoia" ? "Ennoia LLM 초안" : "규칙 기반 fallback";
+  const sourceLabel =
+    draft.source === "ennoia" ? "Ennoia LLM 초안" : draft.source === "agent" ? "일정수정 에이전트 초안" : "규칙 기반 fallback";
   const statusLine = draft.modelStatus ? `<small>${escapeHtml(sourceLabel)} · ${escapeHtml(draft.modelStatus)}</small>` : `<small>${escapeHtml(sourceLabel)}</small>`;
+  const applyLabel = draftApplyBusy ? `<span class="spinner" aria-hidden="true"></span><span>적용 중...</span>` : "플래너에 적용";
   if (draft.needsClarification) {
     return `<p class="draft">${statusLine}<br />${escapeHtml(draft.question)}</p>`;
   }
+  const operationLabel = draft.operation === "add" ? "새 일정 추가" : "기존 일정 수정";
   return `
     <div class="draft">
       ${statusLine}
+      <span class="draft-mode">${operationLabel}</span>
       <p>${escapeHtml(draft.confirmationMessage)}</p>
-      <button type="button" data-action="apply-draft">플래너에 적용</button>
+      ${draft.resolutionMessage ? `<p class="draft-resolution">${escapeHtml(draft.resolutionMessage)}</p>` : ""}
+      ${renderDraftAlternatives(draft.alternatives)}
+      <button type="button" data-action="apply-draft" ${draftApplyBusy ? 'disabled aria-busy="true"' : ""}>${applyLabel}</button>
     </div>
+  `;
+}
+
+function renderDraftAlternatives(alternatives = []) {
+  if (!Array.isArray(alternatives) || alternatives.length === 0) return "";
+  return `
+    <ul class="draft-alternatives" aria-label="대안 후보">
+      ${alternatives
+        .map(
+          (item) => `
+            <li>
+              <strong>${escapeHtml(item.name || item.placeName || "장소 후보")}</strong>
+              <span>${escapeHtml([item.address, item.distanceLabel].filter(Boolean).join(" · "))}</span>
+            </li>
+          `
+        )
+        .join("")}
+    </ul>
   `;
 }
 
@@ -640,7 +674,7 @@ function renderTripDialog() {
           <button type="button" data-action="close-dialog" class="icon-button" aria-label="닫기">×</button>
         </div>
         <div class="grid-2">
-          <label>여행 지역 <input name="region" required value="수원시" /></label>
+          <label>여행 지역 <input name="region" required placeholder="예: 부산시, 대구시, 전주" /></label>
           <label>인원/구성 <input name="travelers" required value="4인 가족" /></label>
         </div>
         <div class="grid-2">
@@ -649,7 +683,7 @@ function renderTripDialog() {
         </div>
         <div class="grid-2">
           <label>아이/동행 특성 <input name="childrenAges" placeholder="예: 초등학생 2명, 부모 2명" /></label>
-          <label>숙소 위치 <input name="lodgingArea" placeholder="예: 수원역 근처" /></label>
+          <label>숙소 위치 <input name="lodgingArea" placeholder="예: 해운대역 근처, 동성로 근처, 전주 한옥마을 근처" /></label>
         </div>
         <div class="grid-2">
           <label>이동수단
@@ -680,12 +714,35 @@ function renderTripDialog() {
   `;
 }
 
+function renderAddAgentDialog() {
+  return `
+    <dialog id="addAgentDialog" class="dialog">
+      <form method="dialog" data-role="natural-add-form">
+        <div class="dialog-head">
+          <div>
+            <p class="eyebrow">AI Schedule Edit</p>
+            <h2>자연어로 일정 추가</h2>
+          </div>
+          <button type="button" data-action="close-dialog" class="icon-button" aria-label="닫기">×</button>
+        </div>
+        <label>추가하거나 바꿀 내용
+          <textarea name="naturalAddText" rows="4" placeholder="예: 둘째날 점심에 한식집 하나 추가해줘">${escapeHtml(naturalAddText)}</textarea>
+        </label>
+        <div class="dialog-actions">
+          <button class="primary full" type="submit" ${naturalEditDisabledAttr()}>${naturalEditSubmitLabel()}</button>
+          <button class="ghost full" type="button" data-action="show-manual-add">직접 입력</button>
+        </div>
+      </form>
+    </dialog>
+  `;
+}
+
 function renderAddDialog() {
   return `
     <dialog id="addDialog" class="dialog">
       <form method="dialog" data-role="add-form">
         <div class="dialog-head">
-          <h2>일정 추가</h2>
+          <h2>직접 일정 추가</h2>
           <button type="button" data-action="close-dialog" class="icon-button" aria-label="닫기">×</button>
         </div>
         <label>제목 <input name="title" required placeholder="예: 경복궁 관람" /></label>
@@ -780,7 +837,8 @@ document.addEventListener("click", async (event) => {
     activeDate = button.dataset.date;
     render();
   }
-  if (action === "show-add") showAddDialog();
+  if (action === "show-add") showAddAgentDialog();
+  if (action === "show-manual-add") showManualAddDialog();
   if (action === "show-edit") showEditDialog(id);
   if (action === "inspect") await mutate(`/api/items/${id}/inspect`, {});
   if (action === "inspect-all") await mutate("/api/inspect/all", {});
@@ -788,11 +846,21 @@ document.addEventListener("click", async (event) => {
   if (action === "delete") await remove(`/api/items/${id}`);
   if (action === "apply-notice") await mutate(`/api/notifications/${id}/apply`, {});
   if (action === "dismiss-notice") await mutate(`/api/notifications/${id}/dismiss`, {});
-  if (action === "apply-draft" && pendingDraft) {
+  if (action === "apply-draft" && pendingDraft && !draftApplyBusy) {
     const draft = pendingDraft;
-    pendingDraft = null;
-    await mutate("/api/natural-edits/apply", draft);
+    draftApplyBusy = true;
+    naturalEditError = "";
     render();
+    try {
+      const result = await mutate("/api/natural-edits/apply", draft);
+      pendingDraft = null;
+      draftApplyBusy = false;
+      highlightEditedItem(result.item);
+    } catch (error) {
+      draftApplyBusy = false;
+      naturalEditError = error.message;
+      render();
+    }
   }
   if (action === "enable-push") await preparePush();
 });
@@ -824,10 +892,25 @@ document.addEventListener("submit", async (event) => {
 
   if (form.dataset.role === "natural-form") {
     const text = new FormData(form).get("naturalText")?.toString() || "";
-    const result = await api("/api/natural-edits", { method: "POST", body: { text } });
-    pendingDraft = result.draft;
-    form.reset();
-    render();
+    naturalEditText = text;
+    if (!text.trim()) {
+      naturalEditError = "수정할 내용을 입력해 주세요.";
+      render();
+      return;
+    }
+    await requestNaturalDraft(text, { mode: "update" });
+  }
+
+  if (form.dataset.role === "natural-add-form") {
+    const text = new FormData(form).get("naturalAddText")?.toString() || "";
+    naturalAddText = text;
+    if (!text.trim()) {
+      naturalEditError = "추가할 내용을 입력해 주세요.";
+      render();
+      return;
+    }
+    document.querySelector("#addAgentDialog")?.close();
+    await requestNaturalDraft(text, { mode: "add_or_update" });
   }
 
   if (form.dataset.role === "add-form") {
@@ -857,9 +940,51 @@ function generationDisabledAttr() {
   return generationBusy ? 'disabled aria-busy="true"' : "";
 }
 
+function naturalEditSubmitLabel() {
+  return naturalEditBusy ? `<span class="spinner" aria-hidden="true"></span><span>수정안 만드는 중...</span>` : "보내기";
+}
+
+function naturalEditDisabledAttr() {
+  return naturalEditBusy || draftApplyBusy ? 'disabled aria-busy="true"' : "";
+}
+
+function naturalEditInputDisabledAttr() {
+  return naturalEditBusy ? 'disabled aria-busy="true"' : "";
+}
+
 function scrollGenerationPanelIntoView() {
   requestAnimationFrame(() => {
     document.querySelector(".generation-panel.busy")?.scrollIntoView({
+      behavior: "smooth",
+      block: "center"
+    });
+  });
+}
+
+function highlightEditedItem(item) {
+  if (!item?.id) {
+    render();
+    return;
+  }
+  const itemId = item.id;
+  const itemDate = dateKey(item.startsAt);
+  if (itemDate) activeDate = itemDate;
+  recentlyEditedItemId = itemId;
+  render();
+  scrollEditedItemIntoView(itemId);
+  if (recentlyEditedTimer) clearTimeout(recentlyEditedTimer);
+  recentlyEditedTimer = setTimeout(() => {
+    if (recentlyEditedItemId === itemId) {
+      recentlyEditedItemId = null;
+      render();
+    }
+  }, 2200);
+}
+
+function scrollEditedItemIntoView(itemId) {
+  requestAnimationFrame(() => {
+    const safeItemId = window.CSS?.escape ? CSS.escape(itemId) : itemId.replaceAll('"', '\\"');
+    document.querySelector(`[data-item-id="${safeItemId}"]`)?.scrollIntoView({
       behavior: "smooth",
       block: "center"
     });
@@ -876,11 +1001,43 @@ async function api(path, options = {}) {
   return response.json();
 }
 
+async function requestNaturalDraft(text, options = {}) {
+  naturalEditBusy = true;
+  naturalEditError = "";
+  pendingDraft = null;
+  render();
+  try {
+    const result = await api("/api/natural-edits", {
+      method: "POST",
+      body: {
+        text,
+        mode: options.mode || "update",
+        activeDate
+      }
+    });
+    pendingDraft = result.draft;
+    if (options.mode === "add_or_update") {
+      naturalAddText = "";
+    } else {
+      naturalEditText = "";
+    }
+    return result.draft;
+  } catch (error) {
+    naturalEditError = error.message;
+    return null;
+  } finally {
+    naturalEditBusy = false;
+    render();
+    scrollNaturalDraftIntoView();
+  }
+}
+
 async function mutate(path, body) {
   const result = await api(path, { method: "POST", body });
   currentState = result.state || (await api("/api/state"));
   ensureActiveDate();
   render();
+  return result;
 }
 
 async function patch(path, body) {
@@ -921,13 +1078,31 @@ function registerServiceWorker() {
   }
 }
 
-function showAddDialog() {
+function showAddAgentDialog() {
+  const dialog = document.querySelector("#addAgentDialog");
+  if (!dialog) return;
+  naturalEditError = "";
+  dialog.showModal();
+}
+
+function showManualAddDialog() {
+  document.querySelector("#addAgentDialog")?.close();
   const dialog = document.querySelector("#addDialog");
   const form = dialog.querySelector("form");
   const date = activeDate || currentState.plan.date || new Date().toISOString().slice(0, 10);
   form.elements.startsAt.value = `${date}T12:00`;
   form.elements.endsAt.value = `${date}T13:00`;
   dialog.showModal();
+}
+
+function scrollNaturalDraftIntoView() {
+  if (!pendingDraft) return;
+  requestAnimationFrame(() => {
+    document.querySelector(".draft-zone")?.scrollIntoView({
+      behavior: "smooth",
+      block: "center"
+    });
+  });
 }
 
 function showEditDialog(id) {
@@ -1025,14 +1200,46 @@ function transportLabel(mode) {
 }
 
 function routeIcon(mode) {
+  const icons = {
+    walk: `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <circle cx="13.5" cy="4.5" r="1.8" fill="currentColor" stroke="none"/>
+      <path d="M9.5 21l2.2-5.4 2.6 2.4 2 3"/>
+      <path d="M7 12.5l3.2-3.2 2.6 1.5 2.3-1.8 2.4 3.4"/>
+    </svg>`,
+    car: `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M4 15.5v-2.1l1.5-4.1A2 2 0 0 1 7.4 8h9.2a2 2 0 0 1 1.9 1.3l1.5 4.1v2.1"/>
+      <path d="M3.6 15.5h16.8" />
+      <circle cx="7.3" cy="16.6" r="1.6" fill="currentColor" stroke="none"/>
+      <circle cx="16.7" cy="16.6" r="1.6" fill="currentColor" stroke="none"/>
+    </svg>`,
+    taxi: `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <rect x="9.5" y="4" width="5" height="2.2" rx="0.6" fill="currentColor" stroke="none"/>
+      <path d="M4 15.5v-2.1l1.5-4.1A2 2 0 0 1 7.4 8h9.2a2 2 0 0 1 1.9 1.3l1.5 4.1v2.1"/>
+      <path d="M3.6 15.5h16.8" />
+      <circle cx="7.3" cy="16.6" r="1.6" fill="currentColor" stroke="none"/>
+      <circle cx="16.7" cy="16.6" r="1.6" fill="currentColor" stroke="none"/>
+    </svg>`,
+    bus: `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <rect x="5" y="4" width="14" height="13" rx="2.2"/>
+      <path d="M5 11h14"/>
+      <path d="M8 17v1.5M16 17v1.5"/>
+      <circle cx="8.4" cy="14.3" r="1" fill="currentColor" stroke="none"/>
+      <circle cx="15.6" cy="14.3" r="1" fill="currentColor" stroke="none"/>
+    </svg>`,
+    subway: `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <rect x="5.5" y="3.5" width="13" height="14" rx="3"/>
+      <path d="M5.5 11.5h13"/>
+      <path d="M8.5 17.5l-1.4 2M15.5 17.5l1.4 2"/>
+      <circle cx="9" cy="14.5" r="1" fill="currentColor" stroke="none"/>
+      <circle cx="15" cy="14.5" r="1" fill="currentColor" stroke="none"/>
+    </svg>`
+  };
   return (
-    {
-      walk: "도",
-      car: "차",
-      taxi: "택",
-      bus: "버",
-      subway: "철"
-    }[mode] || "길"
+    icons[mode] ||
+    `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M5 17c3-6 7-6 7-9a3 3 0 0 1 6 0"/>
+      <path d="M5 17l-1.5 2.5M5 17l2.5 0"/>
+    </svg>`
   );
 }
 
@@ -1054,9 +1261,9 @@ function routeMapProviderLabel(mode) {
 function routeColor(mode) {
   return (
     {
-      walk: "#2ec08b",
+      walk: "#7b6fe8",
       car: "#3c315b",
-      taxi: "#3c315b",
+      taxi: "#1c1c1c",
       bus: "#ab9ff2",
       subway: "#ab9ff2"
     }[mode] || "#ab9ff2"

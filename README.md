@@ -38,6 +38,7 @@ sh scripts/verify-mvp.sh
 - 위험 판정 시 앱 안 알림 생성
 - 우회안 적용 시 해당 일정만 수정
 - 자연어 일정 수정 초안 생성 및 적용
+- 일정 추가 버튼의 AI 우선 자연어 추가/수정 흐름
 - 변경된 일정과 다음 1~2개 일정 재점검 구조
 - 여행기록 데이터 저장
 - PWA 매니페스트, 서비스 워커, 푸시 구독 저장 모델
@@ -63,15 +64,18 @@ sh scripts/dev.sh
 자연어 일정 수정은 Ennoia LLM을 우선 호출하고, 설정이 없거나 실패하면 규칙 기반 fallback으로 동작합니다.
 
 ```bash
-export ENNOIA_NATURAL_EDIT_ENDPOINT="https://api.ennoia.so/api/llm-orchestrator/chat/stream/<multiAgentId>/<version>"
+export ENNOIA_NATURAL_EDIT_ENDPOINT="https://api.ennoia.so/api/preset/v2/chat/completions"
+export ENNOIA_NATURAL_EDIT_HASH="<editAgentHash>"
+export ENNOIA_NATURAL_EDIT_TIMEOUT_MS=20000
 export ENNOIA_API_KEY="..."
 sh scripts/dev.sh
 ```
 
-Ennoia 자연어 수정 에이전트는 아래 JSON만 반환하도록 구성합니다.
+Ennoia Studio에는 `여행 일정 수정 에이전트`를 배포하고, 해당 에이전트 기반의 `여행 일정 수정` 앱을 연결합니다. 자연어 수정 에이전트는 Kakao 장소 키워드 검색 커넥터를 사용하며 아래 JSON만 반환하도록 구성합니다.
 
 ```json
 {
+  "operation": "update",
   "targetItemId": "dinner",
   "intent": "replace_meal",
   "confidence": 0.92,
@@ -81,13 +85,15 @@ Ennoia 자연어 수정 에이전트는 아래 JSON만 반환하도록 구성합
     "category": "meal",
     "memo": "사용자 요청으로 삼겹살 중심 저녁 변경"
   },
+  "alternatives": [],
+  "resolutionMessage": "",
   "needsConfirmation": true,
   "needsClarification": false,
   "confirmationMessage": "비빔밥 저녁을 삼겹살 저녁으로 바꿀까요?"
 }
 ```
 
-서버는 Ennoia 응답을 그대로 적용하지 않고 현재 플래너에 존재하는 `targetItemId`인지 확인한 뒤, 허용된 patch 필드만 반영합니다. 음식, 관광지, 카페, 시간, 이동수단 변경을 같은 구조로 처리할 수 있습니다.
+서버는 Ennoia 응답을 그대로 적용하지 않고 현재 플래너에 존재하는 `targetItemId`인지 확인한 뒤, 허용된 patch 필드만 반영합니다. `operation`이 `add`일 때만 새 일정을 1개 추가합니다. Ennoia가 수정 대상을 못 잡거나 설정이 없거나 실패하거나 `ENNOIA_NATURAL_EDIT_TIMEOUT_MS` 안에 응답하지 않으면 일정수정 에이전트 fallback이 Kakao Local 장소 검색을 시도하고, 정확 후보가 없으면 유사 후보 또는 일반 장소명으로 대체했다는 안내를 draft에 포함합니다.
 
 ## 로컬 저장
 

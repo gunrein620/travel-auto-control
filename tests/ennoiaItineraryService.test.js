@@ -128,6 +128,79 @@ test("generateItineraryPlan falls back when preset endpoint is missing an agent 
   }
 });
 
+test("generateItineraryPlan parses the first balanced JSON object before trailing text", async () => {
+  const originalFetch = globalThis.fetch;
+  const env = snapshotEnv([
+    "ENNOIA_TRIP_GENERATION_ENDPOINT",
+    "ENNOIA_TRIP_GENERATION_HASH",
+    "ENNOIA_NATURAL_EDIT_ENDPOINT",
+    "ENNOIA_API_KEY",
+    "ENNOIA_PROJECT_ID"
+  ]);
+
+  process.env.ENNOIA_TRIP_GENERATION_ENDPOINT = "https://api.ennoia.test/api/preset/v2/chat/completions";
+  process.env.ENNOIA_TRIP_GENERATION_HASH = "agent-hash";
+  process.env.ENNOIA_API_KEY = "secret-key";
+
+  globalThis.fetch = async () => ({
+    ok: true,
+    headers: { get: () => "application/json" },
+    json: async () => ({
+      output: [
+        "```json",
+        JSON.stringify({
+          title: "부산 JSON 뒤 설명 일정",
+          days: [
+            {
+              date: "2026-06-27",
+              title: "부산 첫날",
+              theme: "balanced JSON extraction",
+              items: [
+                {
+                  title: "해운대해수욕장 산책",
+                  placeName: "해운대해수욕장",
+                  address: "부산 해운대구 우동",
+                  lat: 35.1587,
+                  lng: 129.1604,
+                  startsAt: "2026-06-27T10:00:00+09:00",
+                  endsAt: "2026-06-27T11:00:00+09:00",
+                  transportMode: "car",
+                  travelMinutesBefore: 20,
+                  category: "outdoor",
+                  memo: "좌표와 장소명 확인"
+                }
+              ]
+            }
+          ],
+          evidence: ["balanced JSON evidence"],
+          warnings: [],
+          apiStatus: ["KTO 호출"]
+        }),
+        "```",
+        "설명: 이 뒤의 {not json} 과 end 이벤트는 무시해야 합니다.",
+        "end"
+      ].join("\n")
+    })
+  });
+
+  try {
+    const generation = await generateItineraryPlan({
+      region: "부산시",
+      startDate: "2026-06-27",
+      endDate: "2026-06-27",
+      travelers: "4인 가족"
+    });
+
+    assert.equal(generation.trip.source, "ennoia");
+    assert.equal(generation.trip.title, "부산 JSON 뒤 설명 일정");
+    assert.ok(generation.trip.evidence.includes("balanced JSON evidence"));
+    assert.equal(generation.items[0].placeName, "해운대해수욕장");
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv(env);
+  }
+});
+
 function snapshotEnv(names) {
   return Object.fromEntries(names.map((name) => [name, process.env[name]]));
 }

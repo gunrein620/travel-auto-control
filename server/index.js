@@ -3,7 +3,6 @@ import { createServer } from "node:http";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getDueCheckpoints } from "../src/domain/checkpoints.js";
-import { getImpactedItemIds } from "../src/domain/impact.js";
 import { createNotificationForDecision } from "../src/domain/notifications.js";
 import { loadEnvFile } from "./env.js";
 import { generateItineraryPlan } from "./ennoiaItineraryService.js";
@@ -11,6 +10,7 @@ import { draftNaturalLanguageEditWithEnnoia } from "./ennoiaNaturalEditService.j
 import { inspectItem } from "./inspectionService.js";
 import { fetchNearbyParking } from "./parkingService.js";
 import { fetchRouteGeometry } from "./routeService.js";
+import { sanitizeNaturalEditPatch } from "./scheduleEditAgent.js";
 import {
   addItem,
   addNotification,
@@ -146,20 +146,29 @@ async function handleApi(request, response, url) {
 
   if (request.method === "POST" && url.pathname === "/api/natural-edits") {
     const body = await readJson(request);
-    const draft = await draftNaturalLanguageEditWithEnnoia(body.text || "", getState().plan.items);
+    const draft = await draftNaturalLanguageEditWithEnnoia(body.text || "", getState().plan.items, {
+      mode: body.mode || "update",
+      activeDate: body.activeDate || getState().plan.date
+    });
     sendJson(response, 200, { draft });
     return;
   }
 
   if (request.method === "POST" && url.pathname === "/api/natural-edits/apply") {
     const body = await readJson(request);
-    const item = body.targetItemId ? updateItem(body.targetItemId, body.patch || {}) : null;
-    const impactedIds = item ? getImpactedItemIds(getState().plan.items, item.id) : [];
-    const rechecked = [];
-    for (const impactedId of impactedIds) {
-      rechecked.push(await inspectAndRecord(impactedId));
+    if (body.operation === "add") {
+      const item = addItem(sanitizeNaturalEditPatch(body.patch || {}, {}));
+      sendJson(response, 201, { operation: "add", item, rechecked: [], state: getState() });
+      return;
     }
-    sendJson(response, item ? 200 : 404, item ? { item, rechecked, state: getState() } : { error: "대상 일정이 없습니다." });
+
+    const target = body.targetItemId ? findItem(body.targetItemId) : null;
+    const item = target ? updateItem(target.id, sanitizeNaturalEditPatch(body.patch || {}, target)) : null;
+    sendJson(
+      response,
+      item ? 200 : 404,
+      item ? { operation: "update", item, rechecked: [], state: getState() } : { error: "대상 일정이 없습니다." }
+    );
     return;
   }
 

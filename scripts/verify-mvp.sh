@@ -105,16 +105,30 @@ const ddp = await api(`/api/items/${palaceItem.id}/inspect`, { method: "POST", b
 assert(ddp.decision.status === "reroute", "expected operation-hours reroute");
 assert(ddp.decision.reason.includes("운영시간"), "expected operation-hours evidence");
 
+const dinnerItem = generated.state.plan.items.find((item) => {
+  const hour = Number(String(item.startsAt || "").slice(11, 13));
+  return item.category === "meal" && hour >= 17;
+});
+assert(dinnerItem, "expected generated dinner item for natural language edit");
+
 const draft = await api("/api/natural-edits", {
   method: "POST",
-  body: { text: "아 지금 삼겹살이 더 먹고싶으니까 이따 저녁일정 바꾸고 플래너에 적용해줘" }
+  body: { text: `${dinnerItem.title}을 삼겹살로 바꾸고 플래너에 적용해줘` }
 });
-assert(draft.draft.targetItemId, "expected natural language edit to target dinner");
-assert(draft.draft.patch.title === "삼겹살 저녁", "expected natural language edit patch");
+assert(draft.draft.targetItemId === dinnerItem.id, "expected natural language edit to target dinner");
+assert(draft.draft.patch.title.includes("삼겹살"), "expected natural language edit patch");
+const beforeNaturalApply = await api("/api/state");
+const beforeNonTargets = beforeNaturalApply.plan.items
+  .filter((item) => item.id !== draft.draft.targetItemId)
+  .map((item) => JSON.stringify(item));
 
 const natural = await api("/api/natural-edits/apply", { method: "POST", body: draft.draft });
-assert(natural.item.title === "삼겹살 저녁", "expected natural language edit to apply");
-assert(natural.rechecked.length >= 1, "expected changed item to be rechecked");
+assert(natural.item.title.includes("삼겹살"), "expected natural language edit to apply");
+assert(Array.isArray(natural.rechecked) && natural.rechecked.length === 0, "natural edit apply must not recheck or mutate other items");
+const afterNonTargets = natural.state.plan.items
+  .filter((item) => item.id !== draft.draft.targetItemId)
+  .map((item) => JSON.stringify(item));
+assert(JSON.stringify(afterNonTargets) === JSON.stringify(beforeNonTargets), "natural edit apply must leave non-target items unchanged");
 
 const due = await api("/api/inspect/due?now=2026-06-28T09:21:00%2B09:00", { method: "POST", body: {} });
 assert(due.dueCheckpoints.length === 1, "expected due checkpoint filtering");

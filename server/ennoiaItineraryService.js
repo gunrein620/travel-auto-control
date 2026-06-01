@@ -1,4 +1,5 @@
 import { createFallbackTrip, normalizeGeneratedTrip, normalizeTripRequest } from "../src/domain/generatedTrip.js";
+import { parseFirstBalancedJsonObject } from "./ennoiaJson.js";
 
 export async function generateItineraryPlan(input) {
   const request = normalizeTripRequest(input);
@@ -39,6 +40,7 @@ export async function generateItineraryPlan(input) {
     if (!generation.trip.apiStatus.some((status) => status.includes("여행 일정 설계 에이전트"))) {
       generation.trip.apiStatus.unshift("Ennoia 여행 일정 설계 에이전트 응답 수신");
     }
+    generation.trip.apiStatus = limitStringList(generation.trip.apiStatus);
     return completeMissingDays(generation, request);
   } catch (error) {
     return createFallbackTrip(request, `Ennoia 여행 생성 호출 오류: ${error.message}`);
@@ -68,6 +70,8 @@ function completeMissingDays(generation, request) {
   generation.trip.modelStatus = `${generation.trip.modelStatus} · 누락 날짜 보강`;
   generation.trip.apiStatus.push(`누락 날짜 보강: ${missingDates.join(", ")}`);
   generation.trip.warnings.push("Ennoia가 일부 날짜를 구조화하지 못해 안전 템플릿으로 보강했습니다.");
+  generation.trip.apiStatus = limitStringList(generation.trip.apiStatus);
+  generation.trip.warnings = limitStringList(generation.trip.warnings);
   return generation;
 }
 
@@ -245,7 +249,7 @@ function parseSseText(text) {
         extractTextContent(payload.choices?.[0]?.message?.content) ||
         "";
     } catch {
-      if (!["reserved", "start", "connected"].includes(data)) content += data;
+      if (!["reserved", "start", "connected", "end"].includes(data)) content += data;
     }
   }
   return content;
@@ -269,15 +273,7 @@ function extractTextContent(content) {
 }
 
 function parseJsonObject(text) {
-  const trimmed = String(text || "").trim();
-  if (!trimmed) throw new Error("empty Ennoia response");
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    const match = trimmed.match(/\{[\s\S]*\}/);
-    if (!match) throw new Error("Ennoia response did not include JSON");
-    return JSON.parse(match[0]);
-  }
+  return parseFirstBalancedJsonObject(text);
 }
 
 function extractLooseTrip(text, request) {
@@ -318,4 +314,17 @@ function matchProperty(text, key) {
   if (stringMatch) return stringMatch[1];
   const numberMatch = String(text).match(new RegExp(`"${key}"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)`, "u"));
   return numberMatch ? numberMatch[1] : "";
+}
+
+function limitStringList(value, limit = 5) {
+  const seen = new Set();
+  const result = [];
+  for (const entry of value || []) {
+    const text = String(entry || "").trim();
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    result.push(text);
+    if (result.length >= limit) break;
+  }
+  return result;
 }
