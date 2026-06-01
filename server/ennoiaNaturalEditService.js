@@ -127,6 +127,29 @@ function buildEnnoiaRequest(text, items, options = {}, endpointConfig = getEndpo
         needsClarification: false,
         question: "string | optional",
         resolutionMessage: "string | optional",
+        recommendations: [
+          {
+            id: "string",
+            name: "string",
+            address: "string",
+            distanceLabel: "string",
+            source: "ennoia | kto | kakao",
+            reason: "string",
+            patch: {
+              title: "string",
+              placeName: "string",
+              address: "string",
+              lat: 0,
+              lng: 0,
+              startsAt: "YYYY-MM-DDTHH:mm:ss+09:00",
+              endsAt: "YYYY-MM-DDTHH:mm:ss+09:00",
+              transportMode: "walk | subway | bus | taxi",
+              travelMinutesBefore: 20,
+              category: "meal | indoor | outdoor",
+              memo: "string"
+            }
+          }
+        ],
         alternatives: [],
         confirmationMessage: "string"
       },
@@ -253,7 +276,9 @@ function extractTextContent(content) {
 function sanitizeDraft(draft, items) {
   if (draft.operation === "add") {
     const patch = sanitizeNaturalEditPatch(draft.patch || {}, {});
-    if (Object.keys(patch).length === 0) {
+    const recommendations = normalizeRecommendations(draft, {}, "add", patch);
+    const finalPatch = recommendations[0]?.patch || patch;
+    if (Object.keys(finalPatch).length === 0) {
       return {
         source: "ennoia",
         modelStatus: "Ennoia LLM 추가 초안이 비어 있음",
@@ -269,12 +294,13 @@ function sanitizeDraft(draft, items) {
       operation: "add",
       intent: draft.intent || "add",
       confidence: Number.isFinite(Number(draft.confidence)) ? Number(draft.confidence) : 0.7,
-      patch,
-      alternatives: Array.isArray(draft.alternatives) ? draft.alternatives.slice(0, 2) : [],
+      patch: finalPatch,
+      recommendations,
+      alternatives: Array.isArray(draft.alternatives) ? draft.alternatives.slice(0, 5) : [],
       resolutionMessage: draft.resolutionMessage || "",
       needsConfirmation: draft.needsConfirmation !== false,
       needsClarification: false,
-      confirmationMessage: draft.confirmationMessage || `새 일정으로 ${patch.title || patch.placeName || "요청한 일정"}을 추가할게요.`
+      confirmationMessage: draft.confirmationMessage || `새 일정으로 ${finalPatch.title || finalPatch.placeName || "요청한 일정"}을 추가할게요.`
     };
   }
 
@@ -291,7 +317,9 @@ function sanitizeDraft(draft, items) {
   }
 
   const patch = sanitizeNaturalEditPatch(draft.patch || {}, targetItem);
-  if (Object.keys(patch).length === 0) {
+  const recommendations = normalizeRecommendations(draft, targetItem, "update", patch);
+  const finalPatch = recommendations[0]?.patch || patch;
+  if (Object.keys(finalPatch).length === 0) {
     return {
       source: "ennoia",
       modelStatus: "Ennoia LLM 수정 초안이 비어 있음",
@@ -308,15 +336,98 @@ function sanitizeDraft(draft, items) {
     operation: "update",
     intent: draft.intent || "other",
     confidence: Number.isFinite(Number(draft.confidence)) ? Number(draft.confidence) : 0.7,
-    patch,
-    alternatives: Array.isArray(draft.alternatives) ? draft.alternatives.slice(0, 2) : [],
+    patch: finalPatch,
+    recommendations,
+    alternatives: Array.isArray(draft.alternatives) ? draft.alternatives.slice(0, 5) : [],
     resolutionMessage: draft.resolutionMessage || "",
     needsConfirmation: draft.needsConfirmation !== false,
     needsClarification: false,
     confirmationMessage:
       draft.confirmationMessage ||
-      `${targetItem.title}을 ${patch.title || patch.placeName || "요청한 내용"}으로 바꾸고 영향받는 일정을 다시 점검할게요.`
+      `${targetItem.title}을 ${finalPatch.title || finalPatch.placeName || "요청한 내용"}으로 바꾸고 영향받는 일정을 다시 점검할게요.`
   };
+}
+
+function normalizeRecommendations(draft = {}, targetItem = {}, operation = "update", basePatch = {}) {
+  const candidates = recommendationCandidatesFromDraft(draft, basePatch);
+  return candidates.slice(0, 5).map((candidate, index) => {
+    const patch = recommendationPatch(candidate, targetItem, operation, basePatch);
+    return {
+      id: clean(candidate.id) || recommendationId(candidate, index),
+      name: clean(candidate.name || candidate.placeName || patch.placeName) || "장소 후보",
+      address: clean(candidate.address || patch.address),
+      distanceLabel: clean(candidate.distanceLabel),
+      source: clean(candidate.source) || "ennoia",
+      reason: clean(candidate.reason) || "Ennoia LLM 추천 후보",
+      patch
+    };
+  });
+}
+
+function recommendationCandidatesFromDraft(draft = {}, basePatch = {}) {
+  if (Array.isArray(draft.recommendations) && draft.recommendations.length > 0) {
+    return draft.recommendations;
+  }
+  if (Array.isArray(draft.alternatives) && draft.alternatives.length > 0) {
+    return draft.alternatives;
+  }
+  if (Object.keys(basePatch || {}).length > 0) {
+    return [
+      {
+        id: "primary",
+        name: basePatch.placeName,
+        address: basePatch.address,
+        source: "ennoia",
+        reason: "Ennoia LLM 기본 추천",
+        patch: basePatch
+      }
+    ];
+  }
+  return [];
+}
+
+function recommendationPatch(candidate = {}, targetItem = {}, operation, basePatch = {}) {
+  const candidatePatch = candidate.patch && typeof candidate.patch === "object" ? candidate.patch : {};
+  const candidateName = clean(candidate.name || candidate.placeName || candidatePatch.placeName);
+  const merged = {
+    ...defaultPatchForOperation(targetItem, operation),
+    ...basePatch,
+    ...candidatePatch
+  };
+
+  if (candidateName) {
+    merged.placeName = candidateName;
+    if (!candidatePatch.title) {
+      merged.title = titleFromPlaceName(candidateName, merged.category || targetItem.category);
+    }
+  }
+  if (candidate.address) merged.address = candidate.address;
+  if (candidate.lat !== undefined) merged.lat = candidate.lat;
+  if (candidate.lng !== undefined) merged.lng = candidate.lng;
+
+  return sanitizeNaturalEditPatch(merged, targetItem || {});
+}
+
+function defaultPatchForOperation(targetItem = {}, operation) {
+  if (operation !== "update" || !targetItem?.id) return {};
+  return {
+    startsAt: targetItem.startsAt,
+    endsAt: targetItem.endsAt,
+    transportMode: targetItem.transportMode || "walk",
+    travelMinutesBefore: targetItem.travelMinutesBefore ?? 15,
+    category: targetItem.category || "meal"
+  };
+}
+
+function titleFromPlaceName(placeName, category) {
+  if (!placeName) return "";
+  return category === "meal" ? `${placeName} 식사` : placeName;
+}
+
+function recommendationId(candidate = {}, index) {
+  const raw = clean(candidate.name || candidate.placeName || candidate.patch?.placeName || String(index + 1));
+  const slug = raw.replace(/\s+/g, "-").replace(/[^a-zA-Z0-9가-힣_.:-]/g, "");
+  return `ennoia-${slug || index + 1}`;
 }
 
 function fallbackDraft(text, items, modelStatus, options = {}) {
@@ -424,4 +535,8 @@ function toRadians(degrees) {
 
 function dateKey(value) {
   return String(value || "").slice(0, 10);
+}
+
+function clean(value) {
+  return String(value ?? "").trim();
 }

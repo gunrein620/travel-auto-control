@@ -191,6 +191,128 @@ test("draftNaturalLanguageEditWithEnnoia rejects unsafe target ids and asks a cl
   }
 });
 
+test("draftNaturalLanguageEditWithEnnoia sanitizes recommendations and limits them to five", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalEndpoint = process.env.ENNOIA_NATURAL_EDIT_ENDPOINT;
+  const originalKey = process.env.ENNOIA_API_KEY;
+
+  process.env.ENNOIA_NATURAL_EDIT_ENDPOINT = "https://api.ennoia.test/natural-edit";
+  process.env.ENNOIA_API_KEY = "secret-key";
+
+  globalThis.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      output: JSON.stringify({
+        targetItemId: "dinner",
+        operation: "update",
+        intent: "replace_meal",
+        confidence: 0.88,
+        patch: {
+          title: "첫 후보 저녁",
+          placeName: "첫 후보",
+          category: "meal"
+        },
+        recommendations: Array.from({ length: 6 }, (_, index) => ({
+          id: `rec-${index + 1}`,
+          name: `${index + 1}번 후보`,
+          address: `서울 중구 ${index + 1}`,
+          distanceLabel: `${index + 1}00m`,
+          source: "ennoia",
+          reason: "Ennoia 후보",
+          patch: {
+            title: `${index + 1}번 후보 저녁`,
+            placeName: `${index + 1}번 후보`,
+            address: `서울 중구 ${index + 1}`,
+            lat: 37.56 + index / 1000,
+            lng: 126.98 + index / 1000,
+            category: "meal",
+            unsafeField: "drop-me"
+          }
+        })),
+        needsConfirmation: true,
+        needsClarification: false
+      })
+    })
+  });
+
+  try {
+    const draft = await draftNaturalLanguageEditWithEnnoia("저녁 후보 추천해줘", items);
+
+    assert.equal(draft.recommendations.length, 5);
+    assert.equal(draft.recommendations[0].id, "rec-1");
+    assert.equal(draft.recommendations[4].id, "rec-5");
+    assert.equal(draft.recommendations[0].patch.placeName, "1번 후보");
+    assert.equal(draft.recommendations[0].patch.unsafeField, undefined);
+    assert.deepEqual(draft.patch, draft.recommendations[0].patch);
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv("ENNOIA_NATURAL_EDIT_ENDPOINT", originalEndpoint);
+    restoreEnv("ENNOIA_API_KEY", originalKey);
+  }
+});
+
+test("draftNaturalLanguageEditWithEnnoia converts alternatives into clickable recommendations", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalEndpoint = process.env.ENNOIA_NATURAL_EDIT_ENDPOINT;
+  const originalKey = process.env.ENNOIA_API_KEY;
+
+  process.env.ENNOIA_NATURAL_EDIT_ENDPOINT = "https://api.ennoia.test/natural-edit";
+  process.env.ENNOIA_API_KEY = "secret-key";
+
+  globalThis.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      output: JSON.stringify({
+        targetItemId: "dinner",
+        operation: "update",
+        intent: "replace_meal",
+        confidence: 0.82,
+        patch: {
+          title: "조개공장 저녁",
+          placeName: "조개공장",
+          address: "강원 강릉시 해안로 280",
+          lat: 37.79,
+          lng: 128.91,
+          category: "meal"
+        },
+        alternatives: [
+          {
+            name: "경성조개포차",
+            address: "강원 강릉시 해안로 280",
+            distanceLabel: "250m",
+            lat: 37.791,
+            lng: 128.912
+          },
+          {
+            name: "다이닝조개 본점",
+            address: "강원 강릉시 해안로 280",
+            distanceLabel: "420m",
+            lat: 37.792,
+            lng: 128.913
+          }
+        ],
+        needsConfirmation: true,
+        needsClarification: false
+      })
+    })
+  });
+
+  try {
+    const draft = await draftNaturalLanguageEditWithEnnoia("저녁 조개구이 후보로 바꿔줘", items);
+
+    assert.equal(draft.recommendations.length, 2);
+    assert.equal(draft.recommendations[0].name, "경성조개포차");
+    assert.equal(draft.recommendations[0].patch.placeName, "경성조개포차");
+    assert.equal(draft.recommendations[0].patch.startsAt, items[1].startsAt);
+    assert.equal(draft.recommendations[1].patch.placeName, "다이닝조개 본점");
+    assert.deepEqual(draft.patch, draft.recommendations[0].patch);
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv("ENNOIA_NATURAL_EDIT_ENDPOINT", originalEndpoint);
+    restoreEnv("ENNOIA_API_KEY", originalKey);
+  }
+});
+
 test("draftNaturalLanguageEditWithEnnoia rescues clear edits when Ennoia asks for clarification", async () => {
   const originalFetch = globalThis.fetch;
   const env = snapshotEnv([

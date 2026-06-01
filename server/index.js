@@ -156,14 +156,15 @@ async function handleApi(request, response, url) {
 
   if (request.method === "POST" && url.pathname === "/api/natural-edits/apply") {
     const body = await readJson(request);
+    const patch = selectedNaturalEditPatch(body);
     if (body.operation === "add") {
-      const item = addItem(sanitizeNaturalEditPatch(body.patch || {}, {}));
+      const item = addItem(sanitizeNaturalEditPatch(patch, {}));
       sendJson(response, 201, { operation: "add", item, rechecked: [], state: getState() });
       return;
     }
 
     const target = body.targetItemId ? findItem(body.targetItemId) : null;
-    const item = target ? updateItem(target.id, sanitizeNaturalEditPatch(body.patch || {}, target)) : null;
+    const item = target ? updateItem(target.id, sanitizeNaturalEditPatch(patch, target)) : null;
     sendJson(
       response,
       item ? 200 : 404,
@@ -179,6 +180,14 @@ async function handleApi(request, response, url) {
   }
 
   sendJson(response, 404, { error: "API 경로를 찾을 수 없습니다." });
+}
+
+function selectedNaturalEditPatch(draft = {}) {
+  if (!draft.selectedRecommendationId) return draft.patch || {};
+  const selected = Array.isArray(draft.recommendations)
+    ? draft.recommendations.find((recommendation) => recommendation.id === draft.selectedRecommendationId)
+    : null;
+  return selected?.patch || draft.patch || {};
 }
 
 async function inspectAndRecord(itemId) {

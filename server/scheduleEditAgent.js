@@ -145,26 +145,34 @@ export async function draftScheduleEditWithAgent({
           `${desired.query} 후보를 근처에서 찾지 못해 일반 장소명으로 임시 제안했어요. 지도 상세에서 재확인하세요.`;
   }
 
-  const patch =
+  const afterAnchor = hasAfterReference(requestText);
+  const recommendations = buildRecommendations({
+    candidates: recommendationCandidates(alternatives, selected),
+    operation,
+    target,
+    desired,
+    date,
+    mealSlot,
+    anchor,
+    resolutionMessage,
+    afterAnchor,
+    source: searchSource.source
+  });
+  const patch = recommendations[0]?.patch || sanitizeNaturalEditPatch(
     operation === "add"
-      ? buildAddPatch({
-          selected,
-          desired,
-          date,
-          mealSlot,
-          anchor,
-          resolutionMessage,
-          afterAnchor: hasAfterReference(requestText)
-        })
-      : buildUpdatePatch({ selected, desired, target, mealSlot, resolutionMessage });
+      ? buildAddPatch({ selected, desired, date, mealSlot, anchor, resolutionMessage, afterAnchor })
+      : buildUpdatePatch({ selected, desired, target, mealSlot, resolutionMessage }),
+    target || {}
+  );
 
   return {
     operation,
     targetItemId: operation === "update" ? target.id : undefined,
     intent: intentFor(operation, desired),
     confidence: selected.id?.startsWith("generic-") ? 0.58 : 0.82,
-    patch: sanitizeNaturalEditPatch(patch, target),
-    alternatives: dedupeAlternatives(alternatives).slice(0, 2),
+    patch,
+    recommendations,
+    alternatives: dedupeAlternatives(alternatives).slice(0, 5),
     resolutionMessage,
     needsConfirmation: true,
     needsClarification: false,
@@ -200,6 +208,69 @@ export function sanitizeNaturalEditPatch(patch = {}, targetItem = {}) {
   }
 
   return safe;
+}
+
+function recommendationCandidates(alternatives = [], selected) {
+  const candidates = alternatives.length ? alternatives : [selected];
+  return dedupeAlternatives(candidates.filter(Boolean)).slice(0, 5);
+}
+
+function buildRecommendations({
+  candidates = [],
+  operation,
+  target,
+  desired,
+  date,
+  mealSlot,
+  anchor,
+  resolutionMessage,
+  afterAnchor,
+  source
+}) {
+  return candidates.slice(0, 5).map((candidate, index) => {
+    const recommendationSource = sourceForRecommendation(candidate, source);
+    const rawPatch =
+      operation === "add"
+        ? buildAddPatch({
+            selected: candidate,
+            desired,
+            date,
+            mealSlot,
+            anchor,
+            resolutionMessage,
+            afterAnchor
+          })
+        : buildUpdatePatch({ selected: candidate, desired, target, mealSlot, resolutionMessage });
+    return {
+      id: recommendationId(candidate, index, recommendationSource),
+      name: candidate.name || candidate.placeName || "장소 후보",
+      address: candidate.address || "",
+      distanceLabel: candidate.distanceLabel || "",
+      source: recommendationSource,
+      reason: recommendationReason(recommendationSource, desired),
+      patch: sanitizeNaturalEditPatch(rawPatch, target || {}),
+      placeUrl: candidate.placeUrl || ""
+    };
+  });
+}
+
+function sourceForRecommendation(candidate = {}, source) {
+  if (candidate.id?.startsWith("generic-")) return "fallback";
+  if (source === "kto") return "kto";
+  if (source === "kakao") return "kakao";
+  return source || "fallback";
+}
+
+function recommendationId(candidate = {}, index, source) {
+  const raw = clean(candidate.id || candidate.name || candidate.placeName || String(index + 1));
+  const slug = raw.replace(/\s+/g, "-").replace(/[^a-zA-Z0-9가-힣_.:-]/g, "");
+  return `${source || "candidate"}-${slug || index + 1}`;
+}
+
+function recommendationReason(source, desired = {}) {
+  if (source === "kto") return `KTO 관광정보에서 찾은 ${desired.label || "장소"} 후보`;
+  if (source === "kakao") return `Kakao Local에서 찾은 ${desired.label || "장소"} 후보`;
+  return `${desired.label || "장소"} 검색 결과가 부족해 만든 임시 후보`;
 }
 
 function findTargetItem(text, items) {

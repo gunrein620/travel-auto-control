@@ -114,6 +114,85 @@ test("natural language edit apply can add a single drafted schedule item", async
   }
 });
 
+test("natural language edit apply uses the selected recommendation patch", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "prompton-natural-recommendation-"));
+  const stateFile = join(tempDir, "state.json");
+  const port = String(await getFreePort());
+  const server = spawn(process.execPath, ["server/index.js"], {
+    cwd: new URL("..", import.meta.url),
+    env: {
+      ...process.env,
+      PORT: port,
+      STATE_FILE: stateFile,
+      LIVE_WEATHER: "0",
+      ENNOIA_NATURAL_EDIT_ENDPOINT: "",
+      ENNOIA_API_KEY: "",
+      KTO_SERVICE_KEY: "",
+      KAKAO_REST_API_KEY: ""
+    },
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+
+  try {
+    await waitForServer(server, port);
+    const baseUrl = `http://localhost:${port}`;
+
+    const before = await api(baseUrl, "/api/state");
+    const dinner = before.plan.items.find((item) => item.id === "dinner");
+    const applied = await api(baseUrl, "/api/natural-edits/apply", {
+      method: "POST",
+      body: {
+        operation: "update",
+        targetItemId: "dinner",
+        selectedRecommendationId: "second-choice",
+        patch: {
+          title: "첫 후보 저녁",
+          placeName: "첫 후보",
+          category: "meal"
+        },
+        recommendations: [
+          {
+            id: "first-choice",
+            name: "첫 후보",
+            patch: {
+              title: "첫 후보 저녁",
+              placeName: "첫 후보",
+              category: "meal"
+            }
+          },
+          {
+            id: "second-choice",
+            name: "선택 후보",
+            patch: {
+              title: "선택 후보 저녁",
+              placeName: "선택 후보",
+              address: "서울 중구 선택로 2",
+              lat: 37.562,
+              lng: 126.982,
+              startsAt: dinner.startsAt,
+              endsAt: dinner.endsAt,
+              transportMode: "walk",
+              category: "meal",
+              memo: "사용자가 추천 후보를 클릭해 선택"
+            }
+          }
+        ]
+      }
+    });
+
+    const target = applied.state.plan.items.find((item) => item.id === "dinner");
+    assert.equal(applied.operation, "update");
+    assert.equal(target.placeName, "선택 후보");
+    assert.equal(target.address, "서울 중구 선택로 2");
+    assert.equal(target.lat, 37.562);
+    assert.equal(target.title, "선택 후보 저녁");
+  } finally {
+    server.kill();
+    await onceExit(server);
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 async function api(baseUrl, path, options = {}) {
   const response = await fetch(`${baseUrl}${path}`, {
     method: options.method || "GET",

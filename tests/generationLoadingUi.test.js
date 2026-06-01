@@ -36,9 +36,19 @@ test("natural edit composer shows loading, live draft, and local errors", () => 
   assert.match(mainSource, /let draftApplyBusy = false/);
   assert.match(mainSource, /let naturalEditError = ""/);
   assert.match(mainSource, /수정안 만드는 중\.\.\./);
-  assert.match(mainSource, /class="spinner"/);
+  assert.match(mainSource, /thinking-dots/);
+  assert.match(stylesSource, /@keyframes thinking-bounce/);
   assert.match(mainSource, /class="draft-zone" aria-live="polite"/);
   assert.match(mainSource, /class="natural-error"/);
+});
+
+test("natural edit composer lives in a collapsible left sidebar", () => {
+  assert.match(mainSource, /data-action="toggle-sidebar"/);
+  assert.match(mainSource, /class="sidebar"/);
+  assert.match(mainSource, /sidebar-backdrop/);
+  assert.match(mainSource, /classList\.toggle\("sidebar-open"/);
+  assert.match(mainSource, /class="composer" data-role="natural-form"/);
+  assert.match(stylesSource, /body\.sidebar-open \.sidebar/);
 });
 
 test("natural edit apply scrolls to the updated item and highlights it", () => {
@@ -61,11 +71,13 @@ test("add schedule button opens the AI-first natural edit dialog with manual fal
   assert.match(mainSource, /직접 입력/);
 });
 
-test("natural edit draft renders operation, resolution, and alternatives", () => {
+test("natural edit draft renders operation, resolution, and clickable recommendations", () => {
   assert.match(mainSource, /draft\.operation === "add"/);
   assert.match(mainSource, /resolutionMessage/);
-  assert.match(mainSource, /renderDraftAlternatives/);
-  assert.match(stylesSource, /\.draft-alternatives/);
+  assert.match(mainSource, /renderDraftRecommendations/);
+  assert.match(mainSource, /data-action="apply-recommendation"/);
+  assert.match(mainSource, /selectedRecommendationId/);
+  assert.match(stylesSource, /\.draft-recommendations/);
 }
 );
 

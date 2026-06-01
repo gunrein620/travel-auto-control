@@ -1436,6 +1436,88 @@ h3 {
   color: var(--stone);
 }
 
+/* ---------- left sidebar (natural-language schedule editing) ---------- */
+.topbar-lead {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  height: 100dvh;
+  z-index: 20;
+  width: min(400px, 88vw);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 22px 22px 28px;
+  background: var(--paper);
+  border-right: 1px solid var(--fog);
+  box-shadow: var(--shadow-card);
+  transform: translateX(-100%);
+  transition: transform 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow-y: auto;
+}
+
+body.sidebar-open .sidebar {
+  transform: translateX(0);
+}
+
+.sidebar-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.sidebar-head h2 {
+  font-size: 21px;
+  letter-spacing: -0.02em;
+  color: var(--violet);
+}
+
+.sidebar-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 19;
+  border: 0;
+  padding: 0;
+  background: rgba(60, 49, 91, 0.34);
+  backdrop-filter: blur(4px);
+  opacity: 0;
+  pointer-events: none;
+  cursor: pointer;
+  transition: opacity 0.32s ease;
+}
+
+body.sidebar-open .sidebar-backdrop {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* the composer drops its card chrome and flows full-width inside the sidebar */
+.sidebar .composer {
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.sidebar .composer-row {
+  grid-template-columns: 1fr;
+  gap: 14px;
+}
+
+.sidebar .composer-row button {
+  width: 100%;
+  padding: 12px;
+}
+
 /* ---------- composer ---------- */
 .composer {
   width: min(1080px, calc(100% - 40px));
@@ -1493,20 +1575,63 @@ h3 {
   background: #d7d2fb;
 }
 
-.spinner {
-  display: inline-block;
-  width: 1em;
-  height: 1em;
-  border: 2px solid currentColor;
-  border-right-color: transparent;
-  border-radius: 999px;
-  animation: spinner-spin 700ms linear infinite;
+/* playful "thinking" dots — a livelier stand-in for the old spinner */
+.thinking-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
 
-@keyframes spinner-spin {
-  to {
-    transform: rotate(1turn);
+.thinking-dots i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--grape);
+  animation: thinking-bounce 1.05s ease-in-out infinite;
+}
+
+.thinking-dots i:nth-child(1) {
+  background: var(--grape);
+  animation-delay: -0.32s;
+}
+
+.thinking-dots i:nth-child(2) {
+  background: var(--green);
+  animation-delay: -0.16s;
+}
+
+.thinking-dots i:nth-child(3) {
+  background: var(--reroute);
+  animation-delay: 0s;
+}
+
+/* compact, single-color variant for use inside buttons */
+.thinking-dots.solid i {
+  width: 6px;
+  height: 6px;
+  background: currentColor;
+}
+
+@keyframes thinking-bounce {
+  0%, 80%, 100% {
+    transform: translateY(0) scale(0.8);
+    opacity: 0.45;
   }
+  40% {
+    transform: translateY(-7px) scale(1.12);
+    opacity: 1;
+  }
+}
+
+.thinking-label {
+  font-weight: 500;
+  background: linear-gradient(90deg, var(--violet) 25%, var(--grape) 50%, var(--violet) 75%);
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: shimmer 2.2s linear infinite;
 }
 
 .natural-error {
@@ -1579,39 +1704,80 @@ textarea {
   color: #6a5fa0;
 }
 
-.draft-alternatives {
+.draft-recommendations {
   display: grid;
   gap: 8px;
   margin: 12px 0 0;
   padding: 0;
-  list-style: none;
 }
 
-.draft-alternatives li {
+.draft-recommendation {
+  width: 100%;
   display: grid;
-  gap: 3px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
   padding: 10px 12px;
   border-radius: 14px;
+  border: 1px solid transparent;
   background: rgba(253, 252, 254, 0.72);
+  color: var(--violet);
+  text-align: left;
 }
 
-.draft-alternatives strong {
+.draft-recommendation:hover:not(:disabled),
+.draft-recommendation:focus-visible {
+  border-color: rgba(111, 94, 177, 0.28);
+  background: var(--paper);
+}
+
+.draft-rec-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: rgba(111, 94, 177, 0.12);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.draft-rec-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.draft-rec-copy strong {
   color: var(--violet);
   font-weight: 500;
 }
 
-.draft-alternatives span {
+.draft-rec-copy span,
+.draft-rec-copy small {
   color: var(--stone);
   font-size: 13px;
+}
+
+.draft-rec-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
+  color: var(--violet);
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .draft.pending {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
 }
 
-.draft button {
+.draft > button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1855,10 +2021,17 @@ body:not(.app-ready) .composer { animation-delay: 0.36s; }
   .gen-bar span,
   .gen-skel-time,
   .gen-skel-lines i,
-  .spinner,
+  .thinking-dots i,
+  .thinking-label,
   .plan-item.just-edited::after,
   .loader {
     animation: none;
+  }
+
+  /* keep the label readable once its shimmer sweep is disabled */
+  .thinking-label {
+    -webkit-text-fill-color: var(--violet);
+    color: var(--violet);
   }
 
   .gen-track li:nth-child(2),
@@ -1872,6 +2045,8 @@ body:not(.app-ready) .composer { animation-delay: 0.36s; }
     width: 60%;
   }
 
+  .sidebar,
+  .sidebar-backdrop,
   button,
   .plan-item,
   .parking-option,

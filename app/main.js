@@ -12,8 +12,10 @@ let draftApplyBusy = false;
 let naturalEditError = "";
 let naturalEditText = "";
 let naturalAddText = "";
+let draftApplyRecommendationId = "";
 let recentlyEditedItemId = null;
 let recentlyEditedTimer = null;
+let sidebarOpen = false;
 const parkingCache = new Map();
 const routeSegmentCache = new Map();
 const routeGeometryCache = new Map();
@@ -42,9 +44,12 @@ function render() {
 
   app.innerHTML = `
     <header class="topbar">
-      <div>
-        <p class="eyebrow">CONTROL PLAN</p>
-        <h1>자동화 플래너</h1>
+      <div class="topbar-lead">
+        <button class="icon-button sidebar-toggle" data-action="toggle-sidebar" aria-label="자연어 일정 수정 열기" aria-expanded="${sidebarOpen}">✎</button>
+        <div>
+          <p class="eyebrow">CONTROL PLAN</p>
+          <h1>자동화 플래너</h1>
+        </div>
       </div>
       <div class="topbar-actions">
         <button class="soft-button" data-action="open-trip" ${generationDisabledAttr()}>${generationActionLabel("AI 일정 설계")}</button>
@@ -101,15 +106,24 @@ function render() {
       </section>
     </main>
 
-    <form class="composer" data-role="natural-form" aria-busy="${naturalEditBusy}">
-      <label for="naturalText">자연어로 일정 수정</label>
-      <div class="composer-row">
-        <input id="naturalText" name="naturalText" placeholder="예: 이따 저녁은 삼겹살로 바꾸고 플래너에 적용해줘" autocomplete="off" value="${escapeHtml(naturalEditText)}" ${naturalEditInputDisabledAttr()} />
-        <button type="submit" ${naturalEditDisabledAttr()}>${naturalEditSubmitLabel()}</button>
+    <button class="sidebar-backdrop" type="button" data-action="close-sidebar" aria-label="사이드바 닫기" tabindex="${sidebarOpen ? "0" : "-1"}"></button>
+    <aside class="sidebar" aria-label="자연어로 일정 수정" aria-hidden="${!sidebarOpen}">
+      <div class="sidebar-head">
+        <div>
+          <p class="eyebrow">AI Schedule Edit</p>
+          <h2>자연어로 일정 수정</h2>
+        </div>
+        <button type="button" class="icon-button" data-action="close-sidebar" aria-label="닫기">×</button>
       </div>
-      ${naturalEditError ? `<p class="natural-error" role="alert">${escapeHtml(naturalEditError)}</p>` : ""}
-      <div class="draft-zone" aria-live="polite">${naturalEditBusy ? `<p class="draft pending"><span class="spinner" aria-hidden="true"></span>수정안 만드는 중...</p>` : pendingDraft ? renderDraft(pendingDraft) : ""}</div>
-    </form>
+      <form class="composer" data-role="natural-form" aria-busy="${naturalEditBusy}">
+        <div class="composer-row">
+          <input id="naturalText" name="naturalText" aria-label="자연어로 일정 수정" placeholder="예: 이따 저녁은 삼겹살로 바꾸고 플래너에 적용해줘" autocomplete="off" value="${escapeHtml(naturalEditText)}" ${naturalEditInputDisabledAttr()} />
+          <button type="submit" ${naturalEditDisabledAttr()}>${naturalEditSubmitLabel()}</button>
+        </div>
+        ${naturalEditError ? `<p class="natural-error" role="alert">${escapeHtml(naturalEditError)}</p>` : ""}
+        <div class="draft-zone" aria-live="polite">${naturalEditBusy ? `<p class="draft pending">${thinkingDots()}<span class="thinking-label">수정안 만드는 중...</span></p>` : pendingDraft ? renderDraft(pendingDraft) : ""}</div>
+      </form>
+    </aside>
 
     ${renderTripDialog()}
     ${renderAddAgentDialog()}
@@ -120,9 +134,26 @@ function render() {
   hydrateRouteMaps();
   hydrateRouteParking();
 
+  document.body.classList.toggle("sidebar-open", sidebarOpen);
+
   if (!document.body.classList.contains("app-ready")) {
     requestAnimationFrame(() => document.body.classList.add("app-ready"));
   }
+}
+
+// Open/close the left sidebar without a full re-render so the CSS transition can run
+// on the persistent body class. Keeps a11y attributes in sync on the existing nodes.
+function setSidebarOpen(open) {
+  sidebarOpen = open;
+  document.body.classList.toggle("sidebar-open", open);
+  document.querySelector(".sidebar")?.setAttribute("aria-hidden", String(!open));
+  document.querySelector(".sidebar-backdrop")?.setAttribute("tabindex", open ? "0" : "-1");
+  const toggle = document.querySelector(".sidebar-toggle");
+  if (toggle) {
+    toggle.setAttribute("aria-expanded", String(open));
+    toggle.setAttribute("aria-label", open ? "자연어 일정 수정 닫기" : "자연어 일정 수정 열기");
+  }
+  if (open) document.querySelector("#naturalText")?.focus();
 }
 
 function renderHome(alertCount) {
@@ -627,7 +658,7 @@ function renderDraft(draft) {
   const sourceLabel =
     draft.source === "ennoia" ? "Ennoia LLM 초안" : draft.source === "agent" ? "일정수정 에이전트 초안" : "규칙 기반 fallback";
   const statusLine = draft.modelStatus ? `<small>${escapeHtml(sourceLabel)} · ${escapeHtml(draft.modelStatus)}</small>` : `<small>${escapeHtml(sourceLabel)}</small>`;
-  const applyLabel = draftApplyBusy ? `<span class="spinner" aria-hidden="true"></span><span>적용 중...</span>` : "플래너에 적용";
+  const applyLabel = draftApplyBusy ? `${thinkingDots("solid")}<span>적용 중...</span>` : "플래너에 적용";
   if (draft.needsClarification) {
     return `<p class="draft">${statusLine}<br />${escapeHtml(draft.question)}</p>`;
   }
@@ -638,27 +669,44 @@ function renderDraft(draft) {
       <span class="draft-mode">${operationLabel}</span>
       <p>${escapeHtml(draft.confirmationMessage)}</p>
       ${draft.resolutionMessage ? `<p class="draft-resolution">${escapeHtml(draft.resolutionMessage)}</p>` : ""}
-      ${renderDraftAlternatives(draft.alternatives)}
+      ${renderDraftRecommendations(draft)}
       <button type="button" data-action="apply-draft" ${draftApplyBusy ? 'disabled aria-busy="true"' : ""}>${applyLabel}</button>
     </div>
   `;
 }
 
-function renderDraftAlternatives(alternatives = []) {
-  if (!Array.isArray(alternatives) || alternatives.length === 0) return "";
+function renderDraftRecommendations(draft = {}) {
+  const recommendations = Array.isArray(draft.recommendations) && draft.recommendations.length > 0 ? draft.recommendations : [];
+  if (recommendations.length === 0) return "";
   return `
-    <ul class="draft-alternatives" aria-label="대안 후보">
-      ${alternatives
+    <div class="draft-recommendations" role="list" aria-label="추천 후보">
+      ${recommendations
         .map(
-          (item) => `
-            <li>
-              <strong>${escapeHtml(item.name || item.placeName || "장소 후보")}</strong>
-              <span>${escapeHtml([item.address, item.distanceLabel].filter(Boolean).join(" · "))}</span>
-            </li>
-          `
+          (item, index) => {
+            const recommendationId = item.id || `recommendation-${index}`;
+            const isApplying = draftApplyBusy && draftApplyRecommendationId === recommendationId;
+            return `
+              <button
+                type="button"
+                class="draft-recommendation"
+                data-action="apply-recommendation"
+                data-id="${escapeHtml(recommendationId)}"
+                ${draftApplyBusy ? 'disabled aria-busy="true"' : ""}
+                role="listitem"
+              >
+                <span class="draft-rec-index">${index + 1}</span>
+                <span class="draft-rec-copy">
+                  <strong>${escapeHtml(item.name || item.placeName || "장소 후보")}</strong>
+                  <span>${escapeHtml([item.address, item.distanceLabel].filter(Boolean).join(" · "))}</span>
+                  ${item.reason ? `<small>${escapeHtml(item.reason)}</small>` : ""}
+                </span>
+                <span class="draft-rec-action">${isApplying ? `${thinkingDots("solid")}<span>적용 중...</span>` : "이 후보 적용"}</span>
+              </button>
+            `;
+          }
         )
         .join("")}
-    </ul>
+    </div>
   `;
 }
 
@@ -831,6 +879,8 @@ document.addEventListener("click", async (event) => {
   if (!action) return;
 
   if (action === "refresh") await refresh();
+  if (action === "toggle-sidebar") setSidebarOpen(!sidebarOpen);
+  if (action === "close-sidebar") setSidebarOpen(false);
   if (action === "close-dialog") button.closest("dialog")?.close();
   if (action === "open-trip" && !generationBusy) document.querySelector("#tripDialog").showModal();
   if (action === "select-day") {
@@ -846,22 +896,8 @@ document.addEventListener("click", async (event) => {
   if (action === "delete") await remove(`/api/items/${id}`);
   if (action === "apply-notice") await mutate(`/api/notifications/${id}/apply`, {});
   if (action === "dismiss-notice") await mutate(`/api/notifications/${id}/dismiss`, {});
-  if (action === "apply-draft" && pendingDraft && !draftApplyBusy) {
-    const draft = pendingDraft;
-    draftApplyBusy = true;
-    naturalEditError = "";
-    render();
-    try {
-      const result = await mutate("/api/natural-edits/apply", draft);
-      pendingDraft = null;
-      draftApplyBusy = false;
-      highlightEditedItem(result.item);
-    } catch (error) {
-      draftApplyBusy = false;
-      naturalEditError = error.message;
-      render();
-    }
-  }
+  if (action === "apply-draft" && pendingDraft && !draftApplyBusy) await applyPendingDraft();
+  if (action === "apply-recommendation" && pendingDraft && !draftApplyBusy) await applyPendingDraft(id);
   if (action === "enable-push") await preparePush();
 });
 
@@ -941,7 +977,13 @@ function generationDisabledAttr() {
 }
 
 function naturalEditSubmitLabel() {
-  return naturalEditBusy ? `<span class="spinner" aria-hidden="true"></span><span>수정안 만드는 중...</span>` : "보내기";
+  return naturalEditBusy ? `${thinkingDots("solid")}<span>수정안 만드는 중...</span>` : "보내기";
+}
+
+// Playful "thinking" dots that replace the old plain spinner during AI edits.
+function thinkingDots(modifier = "") {
+  const cls = modifier ? `thinking-dots ${modifier}` : "thinking-dots";
+  return `<span class="${cls}" aria-hidden="true"><i></i><i></i><i></i></span>`;
 }
 
 function naturalEditDisabledAttr() {
@@ -1001,10 +1043,31 @@ async function api(path, options = {}) {
   return response.json();
 }
 
+async function applyPendingDraft(selectedRecommendationId = "") {
+  const draft = selectedRecommendationId ? { ...pendingDraft, selectedRecommendationId } : pendingDraft;
+  draftApplyBusy = true;
+  draftApplyRecommendationId = selectedRecommendationId;
+  naturalEditError = "";
+  render();
+  try {
+    const result = await mutate("/api/natural-edits/apply", draft);
+    pendingDraft = null;
+    draftApplyBusy = false;
+    draftApplyRecommendationId = "";
+    highlightEditedItem(result.item);
+  } catch (error) {
+    draftApplyBusy = false;
+    draftApplyRecommendationId = "";
+    naturalEditError = error.message;
+    render();
+  }
+}
+
 async function requestNaturalDraft(text, options = {}) {
   naturalEditBusy = true;
   naturalEditError = "";
   pendingDraft = null;
+  draftApplyRecommendationId = "";
   render();
   try {
     const result = await api("/api/natural-edits", {

@@ -164,6 +164,65 @@ test("draftScheduleEditWithAgent drafts an add operation when add mode has no ex
   assert.match(draft.confirmationMessage, /새 일정/);
 });
 
+test("draftScheduleEditWithAgent returns clickable Kakao recommendations with apply-ready patches", async () => {
+  const draft = await draftScheduleEditWithAgent({
+    text: "둘째날 점심에 한식집 하나 추가해줘",
+    items,
+    mode: "add_or_update",
+    activeDate: "2026-06-28",
+    searchPlaces: async () => ({
+      source: "kakao",
+      status: "ok",
+      items: [
+        {
+          id: "korean-2",
+          name: "신포 한식",
+          address: "인천 중구 신포로 20",
+          lat: 37.4729,
+          lng: 126.623,
+          distanceMeters: 300,
+          distanceLabel: "300m",
+          placeUrl: "https://place.map.kakao.com/korean-2",
+          category: "place"
+        },
+        {
+          id: "korean-3",
+          name: "개항로 밥상",
+          address: "인천 중구 개항로 30",
+          lat: 37.4733,
+          lng: 126.6227,
+          distanceMeters: 360,
+          distanceLabel: "360m",
+          placeUrl: "https://place.map.kakao.com/korean-3",
+          category: "place",
+          categoryDetail: "음식점 > 한식"
+        },
+        {
+          id: "korean-4",
+          name: "신포 백반",
+          address: "인천 중구 신포로 31",
+          lat: 37.4734,
+          lng: 126.6224,
+          distanceMeters: 390,
+          distanceLabel: "390m",
+          placeUrl: "https://place.map.kakao.com/korean-4",
+          category: "place"
+        }
+      ],
+      message: "Kakao Local 장소 검색 완료"
+    })
+  });
+
+  assert.equal(draft.recommendations.length, 3);
+  assert.equal(draft.recommendations[0].source, "kakao");
+  assert.equal(draft.recommendations[0].name, "신포 한식");
+  assert.equal(draft.recommendations[0].patch.placeName, "신포 한식");
+  assert.equal(draft.recommendations[1].patch.placeName, "개항로 밥상");
+  assert.equal(draft.recommendations[2].patch.startsAt, "2026-06-28T12:00:00+09:00");
+  assert.deepEqual(draft.patch, draft.recommendations[0].patch);
+  assert.equal(new Set(draft.recommendations.map((recommendation) => recommendation.id)).size, 3);
+});
+
 test("draftScheduleEditWithAgent treats explicit add wording as add even when a meal slot exists", async () => {
   const draft = await draftScheduleEditWithAgent({
     text: "점심에 한식집 하나 추가해줘",
@@ -277,6 +336,56 @@ test("draftScheduleEditWithAgent uses KTO when replacing an existing tourist att
   assert.equal(draft.patch.startsAt, items[2].startsAt);
   assert.equal(draft.patch.endsAt, items[2].endsAt);
   assert.equal(draft.intent, "replace_place");
+});
+
+test("draftScheduleEditWithAgent returns clickable KTO recommendations with apply-ready patches", async () => {
+  const draft = await draftScheduleEditWithAgent({
+    text: "둘째날 오후에 역사 관광지 하나 추가해줘",
+    items,
+    mode: "add_or_update",
+    activeDate: "2026-06-28",
+    searchPlaces: async () => {
+      throw new Error("KTO 후보가 있으면 Kakao 보조 검색을 쓰지 않아야 합니다.");
+    },
+    searchTouristPlaces: async () => ({
+      source: "kto",
+      status: "ok",
+      items: [
+        {
+          id: "kto-1",
+          name: "인천개항장문화지구",
+          address: "인천 중구 신포로27번길 80",
+          lat: 37.4728,
+          lng: 126.6216,
+          distanceMeters: 90,
+          distanceLabel: "90m",
+          placeUrl: "https://korean.visitkorea.or.kr/detail/ms_detail.do?cotid=kto-1",
+          category: "관광지",
+          categoryDetail: "역사관광지"
+        },
+        {
+          id: "kto-2",
+          name: "인천중구생활사전시관",
+          address: "인천 중구 신포로23번길 97",
+          lat: 37.4731,
+          lng: 126.6214,
+          distanceMeters: 120,
+          distanceLabel: "120m",
+          placeUrl: "https://korean.visitkorea.or.kr/detail/ms_detail.do?cotid=kto-2",
+          category: "관광지",
+          categoryDetail: "역사관광지"
+        }
+      ],
+      message: "KTO 관광정보 검색 완료"
+    })
+  });
+
+  assert.equal(draft.recommendations.length, 2);
+  assert.equal(draft.recommendations[0].source, "kto");
+  assert.equal(draft.recommendations[0].patch.category, "outdoor");
+  assert.equal(draft.recommendations[0].patch.memo.includes("KTO 관광정보"), true);
+  assert.equal(draft.recommendations[1].patch.placeName, "인천중구생활사전시관");
+  assert.deepEqual(draft.patch, draft.recommendations[0].patch);
 });
 
 test("draftScheduleEditWithAgent adds cafe after a referenced dinner without labeling it dinner", async () => {
