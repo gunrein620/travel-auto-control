@@ -1486,7 +1486,6 @@ body.sidebar-open .sidebar {
   border: 0;
   padding: 0;
   background: rgba(60, 49, 91, 0.34);
-  backdrop-filter: blur(4px);
   opacity: 0;
   pointer-events: none;
   cursor: pointer;

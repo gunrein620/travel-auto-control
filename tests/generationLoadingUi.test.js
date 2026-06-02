@@ -51,6 +51,13 @@ test("natural edit composer lives in a collapsible left sidebar", () => {
   assert.match(stylesSource, /body\.sidebar-open \.sidebar/);
 });
 
+test("sidebar backdrop does not blur the page behind it", () => {
+  const sidebarBackdropStyles = stylesSource.match(/\.sidebar-backdrop\s*\{[^}]*\}/s)?.[0] || "";
+
+  assert.ok(sidebarBackdropStyles, "expected sidebar backdrop styles");
+  assert.doesNotMatch(sidebarBackdropStyles, /backdrop-filter|filter:\s*blur|blur\(/);
+});
+
 test("natural edit apply scrolls to the updated item and highlights it", () => {
   assert.match(mainSource, /let recentlyEditedItemId = null/);
   assert.match(mainSource, /data-item-id="\$\{escapeHtml\(item\.id\)\}"/);
