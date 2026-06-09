@@ -5,6 +5,14 @@ import { join } from "node:path";
 import test from "node:test";
 import { createInitialState, loadState, saveState } from "../server/statePersistence.js";
 
+test("createInitialState starts empty so the first visit has no sample plan", () => {
+  const state = createInitialState([]);
+  assert.deepEqual(state.plan.items, []);
+  assert.equal(state.plan.title, "");
+  assert.equal(state.plan.date, "");
+  assert.deepEqual(state.notifications, []);
+});
+
 test("state persistence saves and restores planner state without storing API payloads", async () => {
   const dir = await mkdtemp(join(tmpdir(), "travel-ops-"));
   const filePath = join(dir, "state.json");

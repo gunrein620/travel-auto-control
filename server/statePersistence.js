@@ -3,12 +3,12 @@ import { dirname } from "node:path";
 
 const STRIPPED_KEYS = new Set(["rawApiJson", "rawApiResponse", "serviceKey", "apiKey", "authorization"]);
 
-export function createInitialState(seedItems) {
+export function createInitialState(seedItems = []) {
   return {
     plan: {
       id: "today",
-      title: "서울 하루 여행",
-      date: "2026-05-30",
+      title: "",
+      date: "",
       items: structuredClone(seedItems)
     },
     notifications: [],

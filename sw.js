@@ -1,5 +1,5 @@
-const CACHE_NAME = "travel-ops-shell-v3";
-const SHELL = ["/", "/app/main.js", "/app/styles.css", "/manifest.webmanifest"];
+const CACHE_NAME = "travel-ops-shell-v18";
+const SHELL = ["/", "/app/main.js?v=27", "/app/styles.css?v=27", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL)));

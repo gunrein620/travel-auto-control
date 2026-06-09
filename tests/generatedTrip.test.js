@@ -15,6 +15,50 @@ test("normalizeTripRequest builds an inclusive date range", () => {
   assert.equal(request.travelers, "4인 가족");
 });
 
+test("normalizeTripRequest extracts compressed date range and known region from natural request", () => {
+  const request = normalizeTripRequest({
+    requests: "6.23-25 부산 여행, KTO 행사정보까지 확인해서 축제도 제안해줘",
+    referenceDate: "2026-06-03"
+  });
+
+  assert.equal(request.region, "부산");
+  assert.equal(request.resolvedRegion.region, "부산");
+  assert.equal(request.startDate, "2026-06-23");
+  assert.equal(request.endDate, "2026-06-25");
+  assert.deepEqual(request.days, ["2026-06-23", "2026-06-24", "2026-06-25"]);
+});
+
+test("normalizeTripRequest recognizes Seoul requests as a schedulable region", () => {
+  const request = normalizeTripRequest({
+    requests: "서울숲 비 오는 날 우회 코스",
+    startDate: "2026-06-23",
+    endDate: "2026-06-23"
+  });
+
+  assert.equal(request.region, "서울");
+  assert.equal(request.resolvedRegion.region, "서울");
+  assert.ok(request.resolvedRegion.center);
+});
+
+test("normalizeTripRequest preserves the public transit transport choice", () => {
+  const request = normalizeTripRequest({
+    region: "부산시",
+    transportMode: "subway"
+  });
+
+  assert.equal(request.transportMode, "subway");
+});
+
+test("normalizeTripRequest interprets past compressed dates as the nearest future trip", () => {
+  const request = normalizeTripRequest({
+    requests: "1/2~4 부산 여행",
+    referenceDate: "2026-06-03"
+  });
+
+  assert.equal(request.startDate, "2027-01-02");
+  assert.equal(request.endDate, "2027-01-04");
+});
+
 test("createFallbackTrip returns planner-safe multi-day Suwon items", () => {
   const generation = createFallbackTrip({
     region: "수원시",
@@ -63,7 +107,7 @@ test("normalizeTripRequest resolves broad Jeolla input to Jeonju with a warning"
   assert.match(request.resolvedRegion.warning, /넓은 지역 입력이라 전주 중심으로 구성/);
 });
 
-test("createFallbackTrip uses concrete regional templates for Busan Daegu and Jeonju", () => {
+test("createFallbackTrip uses concrete regional templates for Busan Daegu Jeonju and Seoul", () => {
   const cases = [
     {
       region: "부산시",
@@ -85,6 +129,13 @@ test("createFallbackTrip uses concrete regional templates for Busan Daegu and Je
       expectedPlaces: ["전주한옥마을", "경기전", "베테랑 칼국수"],
       addressPattern: /^전북 전주시 /,
       bounds: { minLat: 35.75, maxLat: 35.91, minLng: 127.03, maxLng: 127.25 }
+    },
+    {
+      region: "서울",
+      canonical: "서울",
+      expectedPlaces: ["서울숲", "국립중앙박물관", "광장시장"],
+      addressPattern: /^서울 /,
+      bounds: { minLat: 37.42, maxLat: 37.7, minLng: 126.76, maxLng: 127.19 }
     }
   ];
 
@@ -162,6 +213,42 @@ test("normalizeGeneratedTrip accepts Ennoia-style JSON and strips unusable field
   assert.equal(generation.items[0].category, "outdoor");
   assert.equal(generation.items[0].transportMode, "car");
   assert.equal(JSON.stringify(generation).includes("rawApiJson"), false);
+});
+
+test("normalizeGeneratedTrip preserves KTO event suggestions as itinerary review context", () => {
+  const generation = normalizeGeneratedTrip(
+    {
+      title: "부산 행사 검토 여행",
+      days: [
+        {
+          date: "2026-06-23",
+          title: "1일차",
+          items: [tripItem("10:00", "11:00", "해운대해수욕장", 35.1587, 129.1604)]
+        }
+      ],
+      eventSuggestions: [
+        {
+          contentId: "evt-1",
+          title: "부산 바다 축제",
+          eventstartdate: "20260623",
+          eventenddate: "20260625",
+          addr1: "부산 해운대구",
+          reason: "여행 기간과 해운대 동선이 맞는 KTO 행사 후보",
+          rawApiJson: { hidden: true }
+        }
+      ]
+    },
+    {
+      region: "부산시",
+      startDate: "2026-06-23",
+      endDate: "2026-06-25"
+    }
+  );
+
+  assert.equal(generation.trip.eventSuggestions[0].title, "부산 바다 축제");
+  assert.equal(generation.trip.eventSuggestions[0].dateRange, "2026-06-23~2026-06-25");
+  assert.equal(generation.trip.eventSuggestions[0].area, "부산 해운대구");
+  assert.equal(JSON.stringify(generation.trip.eventSuggestions).includes("rawApiJson"), false);
 });
 
 test("normalizeGeneratedTrip limits Ennoia items to four per day", () => {
@@ -293,6 +380,54 @@ test("normalizeGeneratedTrip turns nearby self-driving hops into walkable parked
   assert.equal(generation.items[0].transportMode, "car");
   assert.equal(generation.items[1].transportMode, "walk");
   assert.match(generation.items[1].memo, /주차 후 도보/);
+});
+
+test("normalizeGeneratedTrip turns nearby public-transit hops into walkable moves", () => {
+  const generation = normalizeGeneratedTrip(
+    {
+      title: "수원 대중교통 여행",
+      days: [
+        {
+          date: "2026-06-27",
+          title: "1일차",
+          items: [
+            {
+              title: "수원화성박물관",
+              placeName: "수원화성박물관",
+              lat: 37.2821,
+              lng: 127.0191,
+              startsAt: "10:00",
+              endsAt: "11:30",
+              transportMode: "subway",
+              category: "indoor"
+            },
+            {
+              title: "용성통닭 점심",
+              placeName: "용성통닭 본점",
+              lat: 37.2796,
+              lng: 127.0176,
+              startsAt: "12:00",
+              endsAt: "13:00",
+              transportMode: "subway",
+              category: "meal",
+              memo: "Kakao 후보"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      region: "수원시",
+      startDate: "2026-06-27",
+      endDate: "2026-06-27",
+      travelers: "2인",
+      transportMode: "subway"
+    }
+  );
+
+  assert.equal(generation.items[0].transportMode, "subway");
+  assert.equal(generation.items[1].transportMode, "walk");
+  assert.match(generation.items[1].memo, /가까운 구간 도보/);
 });
 
 test("normalizeGeneratedTrip replaces vague Suwon place names with concrete candidates", () => {

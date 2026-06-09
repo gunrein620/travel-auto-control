@@ -1,42 +1,85 @@
 const EARTH_RADIUS_KM = 6371;
 
+// 직선거리(haversine)를 실제 도로거리로 근사하기 위한 우회 계수.
+const ROAD_DETOUR_FACTOR = 1.3;
+
 const ROUTE_MODE = {
   walk: {
     label: "도보",
     kakao: "foot",
     naver: "walk",
-    speedKmh: 4.2,
-    baseMinutes: 3
+    speedKmh: 4.5,
+    accessMinutes: 2,
+    road: false
   },
   car: {
     label: "자가용",
     kakao: "car",
     naver: "car",
-    speedKmh: 24,
-    baseMinutes: 8
+    speedKmh: 22,
+    accessMinutes: 6,
+    road: true
   },
   taxi: {
     label: "택시",
     kakao: "car",
     naver: "car",
-    speedKmh: 26,
-    baseMinutes: 7
+    speedKmh: 23,
+    accessMinutes: 4,
+    road: true
   },
   bus: {
     label: "버스",
     kakao: "publictransit",
     naver: "transit",
-    speedKmh: 17,
-    baseMinutes: 12
+    speedKmh: 16,
+    accessMinutes: 8,
+    road: true
   },
   subway: {
     label: "지하철",
     kakao: "publictransit",
     naver: "transit",
-    speedKmh: 22,
-    baseMinutes: 12
+    speedKmh: 27,
+    accessMinutes: 9,
+    road: false
   }
 };
+
+const WALKABLE_OVERRIDE_MODES = new Set(["car", "bus", "subway"]);
+
+// 시간대별 혼잡 배수 (도로 수단에만 적용; 도보·지하철은 1.0).
+function congestionMultiplier(mode, departAt) {
+  if (!ROUTE_MODE[mode]?.road) return 1;
+  const date = new Date(departAt);
+  if (Number.isNaN(date.getTime())) return 1.15;
+  // 한국 시간 기준 시각/요일.
+  const kst = new Date(date.getTime() + 9 * 60 * 60 * 1000);
+  const hour = kst.getUTCHours();
+  const day = kst.getUTCDay(); // 0=일, 6=토
+  const weekend = day === 0 || day === 6;
+
+  if (weekend) {
+    if (hour >= 11 && hour < 19) return 1.2;
+    if (hour >= 19 && hour < 22) return 1.1;
+    return 0.95;
+  }
+  if (hour >= 7 && hour < 10) return 1.4;
+  if (hour >= 17 && hour < 20) return 1.45;
+  if (hour >= 10 && hour < 17) return 1.15;
+  if (hour >= 20 && hour < 23) return 1.0;
+  return 0.85;
+}
+
+// 거리·수단·출발 시간대를 반영한 현실적 이동시간(분) 추정.
+export function estimateTravelMinutes({ distanceKm, mode, departAt } = {}) {
+  const normalized = normalizeRouteMode(mode);
+  const meta = ROUTE_MODE[normalized];
+  const floor = normalized === "walk" ? 1 : 2;
+  if (!Number.isFinite(distanceKm)) return meta.accessMinutes + floor;
+  const travelMinutes = (distanceKm / meta.speedKmh) * 60 * congestionMultiplier(normalized, departAt);
+  return Math.max(floor, Math.round(meta.accessMinutes + travelMinutes));
+}
 
 export function buildRouteSegments(items = []) {
   const sorted = [...items].sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
@@ -48,7 +91,7 @@ export function buildRouteSegments(items = []) {
     const requestedMode = normalizeRouteMode(to.transportMode);
     const distanceKm = haversineKm(from, to);
     const mode = chooseSegmentMode(requestedMode, distanceKm);
-    const minutes = estimateMinutes(to, distanceKm, mode);
+    const minutes = estimateMinutes(from, to, distanceKm, mode);
     const availableMinutes = minutesBetween(from.endsAt, to.startsAt);
     const modeAdjusted = mode !== requestedMode;
 
@@ -64,7 +107,7 @@ export function buildRouteSegments(items = []) {
       mode,
       modeLabel: ROUTE_MODE[mode].label,
       modeAdjusted,
-      modeReason: modeAdjusted ? "가까운 구간은 주차 후 도보 이동이 자연스러움" : "",
+      modeReason: modeAdjusted ? routeModeAdjustmentReason(requestedMode) : "",
       distanceKm,
       distanceLabel: formatDistance(distanceKm),
       minutes,
@@ -130,16 +173,19 @@ function normalizeRouteMode(mode) {
 }
 
 function chooseSegmentMode(requestedMode, distanceKm) {
-  if (requestedMode === "car" && Number.isFinite(distanceKm) && distanceKm <= 0.8) return "walk";
+  if (WALKABLE_OVERRIDE_MODES.has(requestedMode) && Number.isFinite(distanceKm) && distanceKm <= 0.8) return "walk";
   return requestedMode;
 }
 
-function estimateMinutes(item, distanceKm, mode) {
-  const explicit = Number(item.travelMinutesBefore);
-  if (Number.isFinite(explicit) && explicit > 0) return Math.round(explicit);
-  const meta = ROUTE_MODE[mode];
-  if (!Number.isFinite(distanceKm)) return meta.baseMinutes;
-  return Math.max(3, Math.round(meta.baseMinutes + (distanceKm / meta.speedKmh) * 60));
+function routeModeAdjustmentReason(requestedMode) {
+  return requestedMode === "car"
+    ? "가까운 구간은 주차 후 도보 이동이 자연스러움"
+    : "가까운 구간은 도보 이동이 자연스러움";
+}
+
+function estimateMinutes(from, to, distanceKm, mode) {
+  const roadKm = Number.isFinite(distanceKm) ? distanceKm * ROAD_DETOUR_FACTOR : distanceKm;
+  return estimateTravelMinutes({ distanceKm: roadKm, mode, departAt: from.endsAt || to.startsAt });
 }
 
 function haversineKm(from, to) {
@@ -210,7 +256,7 @@ function minutesBetween(fromIso, toIso) {
   return Math.max(0, Math.round((to - from) / 60000));
 }
 
-function timingTone(minutes, availableMinutes) {
+export function timingTone(minutes, availableMinutes) {
   if (!Number.isFinite(availableMinutes)) return "normal";
   if (availableMinutes < minutes) return "tight";
   if (availableMinutes >= minutes + 15) return "relaxed";

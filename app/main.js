@@ -1,6 +1,7 @@
-import { buildParkingRouteLinks, buildRouteSegments } from "../src/domain/routeSegments.js";
+import { buildParkingRouteLinks, buildRouteSegments, timingTone } from "../src/domain/routeSegments.js";
 
 const app = document.querySelector("#root");
+const ENNOIA_APP_URL = "https://ennoia.so/apps/openLink/d4c56c7f9185453f8851f8989a8aac9c";
 
 let currentState = null;
 let pendingDraft = null;
@@ -15,7 +16,8 @@ let naturalAddText = "";
 let draftApplyRecommendationId = "";
 let recentlyEditedItemId = null;
 let recentlyEditedTimer = null;
-let sidebarOpen = false;
+let chatbotOpen = false;
+let itineraryCollapsed = readItineraryCollapsed();
 const parkingCache = new Map();
 const routeSegmentCache = new Map();
 const routeGeometryCache = new Map();
@@ -45,13 +47,13 @@ function render() {
   app.innerHTML = `
     <header class="topbar">
       <div class="topbar-lead">
-        <button class="icon-button sidebar-toggle" data-action="toggle-sidebar" aria-label="자연어 일정 수정 열기" aria-expanded="${sidebarOpen}">✎</button>
         <div>
           <p class="eyebrow">CONTROL PLAN</p>
           <h1>자동화 플래너</h1>
         </div>
       </div>
       <div class="topbar-actions">
+        <a class="submission-link" href="${ENNOIA_APP_URL}" target="_blank" rel="noopener">Ennoia 앱 열기</a>
         <button class="soft-button" data-action="open-trip" ${generationDisabledAttr()}>${generationActionLabel("AI 일정 설계")}</button>
         <button class="icon-button" data-action="refresh" aria-label="새로고침">↻</button>
       </div>
@@ -61,27 +63,7 @@ function render() {
       ${renderHome(activeAlerts.length)}
       ${renderGenerationStatus()}
 
-      <section class="planner-board" aria-label="여행 타임테이블">
-        <div class="board-head">
-          <div>
-            <p class="eyebrow">Planner</p>
-            <h2>${escapeHtml(currentState.plan.title)}</h2>
-            <p>${escapeHtml(planRangeLabel())} · ${currentState.plan.items.length}개 일정</p>
-          </div>
-          <button class="primary" data-action="inspect-all">전체 점검</button>
-        </div>
-        <div class="day-tabs" role="tablist">
-          ${days.map(renderDayTab).join("")}
-        </div>
-        <div class="quick-panel">
-          <button data-action="show-add" class="soft-button">일정 추가</button>
-          <button data-action="run-due" class="soft-button">체크포인트 실행</button>
-          <button data-action="enable-push" class="soft-button">앱 알림 준비</button>
-        </div>
-        <section class="timeline" aria-label="${escapeHtml(activeDay?.date || "일정")}">
-          ${activeDay?.items.length ? renderTimeline(activeDay.items) : `<p class="empty">이 날짜에는 아직 일정이 없습니다.</p>`}
-        </section>
-      </section>
+      ${renderPlannerBoard(days, activeDay)}
 
       <section class="insight-grid">
         <section class="alerts" aria-label="앱 안 알림">
@@ -106,24 +88,7 @@ function render() {
       </section>
     </main>
 
-    <button class="sidebar-backdrop" type="button" data-action="close-sidebar" aria-label="사이드바 닫기" tabindex="${sidebarOpen ? "0" : "-1"}"></button>
-    <aside class="sidebar" aria-label="자연어로 일정 수정" aria-hidden="${!sidebarOpen}">
-      <div class="sidebar-head">
-        <div>
-          <p class="eyebrow">AI Schedule Edit</p>
-          <h2>자연어로 일정 수정</h2>
-        </div>
-        <button type="button" class="icon-button" data-action="close-sidebar" aria-label="닫기">×</button>
-      </div>
-      <form class="composer" data-role="natural-form" aria-busy="${naturalEditBusy}">
-        <div class="composer-row">
-          <input id="naturalText" name="naturalText" aria-label="자연어로 일정 수정" placeholder="예: 이따 저녁은 삼겹살로 바꾸고 플래너에 적용해줘" autocomplete="off" value="${escapeHtml(naturalEditText)}" ${naturalEditInputDisabledAttr()} />
-          <button type="submit" ${naturalEditDisabledAttr()}>${naturalEditSubmitLabel()}</button>
-        </div>
-        ${naturalEditError ? `<p class="natural-error" role="alert">${escapeHtml(naturalEditError)}</p>` : ""}
-        <div class="draft-zone" aria-live="polite">${naturalEditBusy ? `<p class="draft pending">${thinkingDots()}<span class="thinking-label">수정안 만드는 중...</span></p>` : pendingDraft ? renderDraft(pendingDraft) : ""}</div>
-      </form>
-    </aside>
+    ${renderNaturalEditChatbot()}
 
     ${renderTripDialog()}
     ${renderAddAgentDialog()}
@@ -134,36 +99,184 @@ function render() {
   hydrateRouteMaps();
   hydrateRouteParking();
 
-  document.body.classList.toggle("sidebar-open", sidebarOpen);
+  document.body.classList.toggle("chatbot-open", chatbotOpen);
 
   if (!document.body.classList.contains("app-ready")) {
     requestAnimationFrame(() => document.body.classList.add("app-ready"));
   }
 }
 
-// Open/close the left sidebar without a full re-render so the CSS transition can run
-// on the persistent body class. Keeps a11y attributes in sync on the existing nodes.
-function setSidebarOpen(open) {
-  sidebarOpen = open;
-  document.body.classList.toggle("sidebar-open", open);
-  document.querySelector(".sidebar")?.setAttribute("aria-hidden", String(!open));
-  document.querySelector(".sidebar-backdrop")?.setAttribute("tabindex", open ? "0" : "-1");
-  const toggle = document.querySelector(".sidebar-toggle");
+function renderNaturalEditChatbot() {
+  return `
+    <section class="chatbot-widget${chatbotOpen ? " open" : ""}" aria-label="자연어 일정 수정 도우미">
+      <section id="naturalChatbotPanel" class="chatbot-panel" aria-hidden="${!chatbotOpen}">
+        <div class="chatbot-head">
+          <div>
+            <p class="eyebrow">AI Schedule Edit</p>
+            <h2>자연어로 일정 수정</h2>
+          </div>
+          <button type="button" class="icon-button" data-action="close-chatbot" aria-label="챗봇 닫기">×</button>
+        </div>
+        <div class="chatbot-messages">
+          <div class="chat-message assistant">
+            <small>Ennoia Agent</small>
+            <p>바꾸고 싶은 일정을 자연어로 말해 주세요. 검토 후 적용 전 초안을 보여드릴게요.</p>
+          </div>
+          <div class="draft-zone" aria-live="polite">${naturalEditBusy ? `<p class="draft pending">${thinkingDots()}<span class="thinking-label">수정안 만드는 중...</span></p>` : pendingDraft ? renderDraft(pendingDraft) : ""}</div>
+        </div>
+        ${naturalEditError ? `<p class="natural-error" role="alert">${escapeHtml(naturalEditError)}</p>` : ""}
+        <form class="composer chatbot-composer" data-role="natural-form" aria-busy="${naturalEditBusy}">
+          <div class="composer-row">
+            <input id="naturalText" name="naturalText" aria-label="자연어로 일정 수정" placeholder="예: 이따 저녁은 삼겹살로 바꾸고 플래너에 적용해줘" autocomplete="off" value="${escapeHtml(naturalEditText)}" ${naturalEditInputDisabledAttr()} />
+            <button type="submit" ${naturalEditDisabledAttr()}>${naturalEditSubmitLabel()}</button>
+          </div>
+        </form>
+      </section>
+      <button
+        class="chatbot-launcher"
+        type="button"
+        data-action="toggle-chatbot"
+        aria-label="${chatbotOpen ? "자연어 일정 수정 챗봇 닫기" : "자연어 일정 수정 챗봇 열기"}"
+        aria-expanded="${chatbotOpen}"
+        aria-controls="naturalChatbotPanel"
+      >
+        <span class="chatbot-launcher-icon" aria-hidden="true">✎</span>
+        <span>AI 일정 수정</span>
+      </button>
+    </section>
+  `;
+}
+
+function setChatbotOpen(open) {
+  chatbotOpen = open;
+  document.body.classList.toggle("chatbot-open", open);
+  const widget = document.querySelector(".chatbot-widget");
+  widget?.classList.toggle("open", open);
+  document.querySelector("#naturalChatbotPanel")?.setAttribute("aria-hidden", String(!open));
+  const toggle = document.querySelector(".chatbot-launcher");
   if (toggle) {
     toggle.setAttribute("aria-expanded", String(open));
-    toggle.setAttribute("aria-label", open ? "자연어 일정 수정 닫기" : "자연어 일정 수정 열기");
+    toggle.setAttribute("aria-label", open ? "자연어 일정 수정 챗봇 닫기" : "자연어 일정 수정 챗봇 열기");
   }
-  if (open) document.querySelector("#naturalText")?.focus();
+  if (open) focusNaturalEditInput();
+}
+
+function focusNaturalEditInput() {
+  window.setTimeout(() => {
+    const input = document.querySelector("#naturalText");
+    if (!input || input.disabled) return;
+    input.focus({ preventScroll: true });
+  }, 80);
+}
+
+function readItineraryCollapsed() {
+  try {
+    return localStorage.getItem("itineraryCollapsed") === "1";
+  } catch {
+    return false;
+  }
+}
+
+// 여행 일정(타임테이블)을 접었다 폈다 한다. 전체 재렌더 없이 클래스만 토글해
+// 경로 지도 인스턴스를 보존하고, 펼칠 때 Leaflet 타일 크기를 다시 계산한다.
+function setItineraryCollapsed(collapsed) {
+  itineraryCollapsed = collapsed;
+  try {
+    localStorage.setItem("itineraryCollapsed", collapsed ? "1" : "0");
+  } catch {
+    // localStorage 미사용 환경은 무시
+  }
+
+  const board = document.querySelector(".planner-board");
+  board?.classList.toggle("collapsed", collapsed);
+
+  const toggle = board?.querySelector(".board-toggle");
+  if (toggle) {
+    toggle.setAttribute("aria-expanded", String(!collapsed));
+    toggle.setAttribute("aria-label", collapsed ? "여행 일정 펼치기" : "여행 일정 접기");
+  }
+
+  if (!collapsed) {
+    // 숨겨졌다 다시 보이는 지도는 타일이 깨지므로 크기를 재계산.
+    requestAnimationFrame(() => {
+      for (const canvas of document.querySelectorAll(".route-map-canvas")) {
+        canvas._leafletMap?.invalidateSize();
+      }
+    });
+  }
+}
+
+function heroSubline(alertCount) {
+  const region = currentState.plan.region;
+  if (!region) return `여행지를 입력해 일정을 만들어 보세요 · 알림 ${alertCount}개`;
+  const travelers = currentState.plan.travelers;
+  return `${region}${travelers ? ` · ${travelers}` : ""} · 알림 ${alertCount}개`;
+}
+
+function renderPlannerBoard(days, activeDay) {
+  const hasPlan = currentState.plan.items.length > 0;
+
+  if (!hasPlan) {
+    return `
+      <section class="planner-board empty" aria-label="여행 타임테이블">
+        <div class="board-head">
+          <div>
+            <p class="eyebrow">Planner</p>
+            <h2>여행 일정</h2>
+          </div>
+        </div>
+        <div class="planner-empty">
+          <p>아직 만든 일정이 없어요. 여행 조건을 입력하면 타임테이블이 채워집니다.</p>
+          <button class="primary" data-action="open-trip" ${generationDisabledAttr()}>${generationActionLabel("AI로 일정 설계하기")}</button>
+        </div>
+      </section>
+    `;
+  }
+
+  return `
+    <section class="planner-board${itineraryCollapsed ? " collapsed" : ""}" aria-label="여행 타임테이블">
+      <div class="board-head">
+        <div>
+          <p class="eyebrow">Planner</p>
+          <h2>${escapeHtml(currentState.plan.title || "여행 일정")}</h2>
+          <p>${escapeHtml(planRangeLabel())} · ${currentState.plan.items.length}개 일정</p>
+        </div>
+        <div class="board-head-actions">
+          <button class="primary" data-action="inspect-all">전체 점검</button>
+          <button
+            class="icon-button board-toggle"
+            data-action="toggle-itinerary"
+            aria-expanded="${!itineraryCollapsed}"
+            aria-controls="plannerBody"
+            aria-label="${itineraryCollapsed ? "여행 일정 펼치기" : "여행 일정 접기"}"
+          >⌄</button>
+        </div>
+      </div>
+      <div class="planner-body" id="plannerBody">
+        <div class="day-tabs" role="tablist">
+          ${days.map(renderDayTab).join("")}
+        </div>
+        <div class="quick-panel">
+          <button data-action="show-add" class="soft-button">일정 추가</button>
+          <button data-action="run-due" class="soft-button">체크포인트 실행</button>
+          <button data-action="enable-push" class="soft-button">앱 알림 준비</button>
+        </div>
+        <section class="timeline" aria-label="${escapeHtml(activeDay?.date || "일정")}">
+          ${activeDay?.items.length ? renderTimeline(activeDay.items) : `<p class="empty">이 날짜에는 아직 일정이 없습니다.</p>`}
+        </section>
+      </div>
+    </section>
+  `;
 }
 
 function renderHome(alertCount) {
-  const source = currentState.plan.generation?.source === "ennoia" ? "Ennoia" : "연결 대기";
+  const source = generationSourceLabel(currentState.plan.generation);
   return `
     <section class="home-hero">
       <div class="hero-copy">
         <span class="date-pill">${escapeHtml(source)} 주도형</span>
         <h2>여행 조건을 넣으면 일정이 타임테이블로 들어오고, 이동 중에는 계속 점검됩니다.</h2>
-        <p>${escapeHtml(currentState.plan.region || "서울")} · ${escapeHtml(currentState.plan.travelers || "여행자")} · 알림 ${alertCount}개</p>
+        <p>${escapeHtml(heroSubline(alertCount))}</p>
       </div>
       <div class="hero-actions">
         <button class="primary large" data-action="open-trip" ${generationDisabledAttr()}>${generationActionLabel("AI로 일정 설계하기")}</button>
@@ -173,9 +286,15 @@ function renderHome(alertCount) {
   `;
 }
 
+function generationSourceLabel(generation) {
+  if (!generation) return "연결 대기";
+  if (generation.source === "ennoia") return "Ennoia";
+  return "로컬 안전안";
+}
+
 function renderGenerationStatus() {
   if (generationBusy) {
-    const steps = ["관광 정보 수집", "주변 맛집·카페 매칭", "이동 동선·주차 점검", "타임테이블 구성"];
+    const steps = ["관광 정보 수집", "KTO 행사정보 확인", "주변 맛집·카페 매칭", "이동 동선·주차 점검", "타임테이블 구성"];
     return `
       <section class="generation-panel busy" aria-live="polite">
         <div class="gen-orbs" aria-hidden="true">
@@ -187,7 +306,7 @@ function renderGenerationStatus() {
           <div class="gen-busy-copy">
             <span class="gen-chip"><span class="gen-chip-dot"></span>Ennoia AI</span>
             <h2>여행 일정을 짓는 중이에요</h2>
-            <p>관광지와 맛집, 이동 동선을 모아 가장 자연스러운 하루를 구성하고 있어요.</p>
+            <p>관광지와 행사 후보, 맛집, 이동 동선을 모아 가장 자연스러운 하루를 구성하고 있어요.</p>
             <ul class="gen-track" aria-label="일정 생성 진행 단계">
               ${steps
                 .map(
@@ -234,17 +353,39 @@ function renderGenerationStatus() {
   const generation = currentState.plan.generation;
   if (!generation) return "";
   const apiStatus = (generation.apiStatus || []).slice(0, 3);
+  const events = (generation.eventSuggestions || []).slice(0, 3);
   return `
-    <section class="generation-panel">
-      <div>
-        <p class="eyebrow">${generation.source === "ennoia" ? "Ennoia Agent" : "Fallback"}</p>
+      <section class="generation-panel">
+        <div>
+        <p class="eyebrow">${generation.source === "ennoia" ? "Ennoia Agent" : "로컬 안전안"}</p>
         <h2>${escapeHtml(generation.modelStatus || "일정 생성 상태")}</h2>
         <p>${escapeHtml((generation.evidence || [])[0] || "생성된 일정은 점검 단계에서 API로 재확인합니다.")}</p>
+        ${events.length ? renderEventSuggestions(events) : ""}
       </div>
       <div class="api-chips">
         ${apiStatus.map((status) => `<span>${escapeHtml(status)}</span>`).join("")}
       </div>
     </section>
+  `;
+}
+
+function renderEventSuggestions(events) {
+  return `
+    <div class="event-suggestions" aria-label="KTO 행사 후보">
+      <strong>KTO 행사 후보</strong>
+      <ul>
+        ${events
+          .map(
+            (event) => `
+              <li>
+                <span>${escapeHtml(event.title)}</span>
+                <small>${escapeHtml([event.dateRange, event.area, event.reason].filter(Boolean).join(" · "))}</small>
+              </li>
+            `
+          )
+          .join("")}
+      </ul>
+    </div>
   `;
 }
 
@@ -301,7 +442,7 @@ function renderItem(item, index) {
 
 function renderRouteSegment(segment) {
   return `
-    <article class="route-card ${segment.mode} ${segment.timingTone}" data-route-segment data-route-id="${escapeHtml(segment.id)}">
+    <article class="route-card ${segment.mode} ${segment.timingTone}" data-route-segment data-route-id="${escapeHtml(segment.id)}" data-available-minutes="${escapeHtml(String(segment.availableMinutes ?? ""))}">
       <div class="route-rail">
         <span class="route-icon" aria-hidden="true">${routeIcon(segment.mode)}</span>
         <strong>${escapeHtml(segment.modeLabel)}</strong>
@@ -312,7 +453,7 @@ function renderRouteSegment(segment) {
           <div>
             <p class="eyebrow">이동 경로</p>
             <h3>${escapeHtml(segment.fromName)} → ${escapeHtml(segment.toName)}</h3>
-            <p>${escapeHtml(segment.distanceLabel)} · 예상 ${escapeHtml(segment.timeLabel)} · ${escapeHtml(segment.availableLabel)}</p>
+            <p class="route-detail">${escapeHtml(segment.distanceLabel)} · 예상 ${escapeHtml(segment.timeLabel)} · ${escapeHtml(segment.availableLabel)}</p>
             ${segment.modeReason ? `<p class="route-reason">${escapeHtml(segment.modeReason)}</p>` : ""}
           </div>
           <span class="route-badge ${segment.timingTone}">${escapeHtml(routeTimingLabel(segment.timingTone))}</span>
@@ -327,12 +468,10 @@ function renderRouteSegment(segment) {
             to: segment.to,
             mode: segment.mode,
             label: `${segment.fromName}에서 ${segment.toName}까지 ${segment.modeLabel} 경로`,
-            externalUrl: segment.mapProvider === "naver" ? segment.naverUrl : segment.mapEmbedUrl
+            externalUrl: segment.mapProvider === "naver" ? segment.naverUrl : segment.mapEmbedUrl,
+            departAt: segment.from?.endsAt,
+            primary: true
           })}
-          <p class="route-map-fallback">
-            도로 경로는 실제 교통상황을 반영하지 않은 참고선입니다.
-            <a href="${escapeHtml(segment.mapProvider === "naver" ? segment.naverUrl : segment.mapEmbedUrl)}" target="_blank" rel="noopener noreferrer">새 창에서 열기</a>
-          </p>
         </div>
         ${
           segment.needsParking
@@ -455,7 +594,7 @@ function renderParkingLinkedMap(segment, linked) {
   `;
 }
 
-function renderRouteMapCanvas({ from, to, mode, label, externalUrl }) {
+function renderRouteMapCanvas({ from, to, mode, label, externalUrl, departAt, primary }) {
   return `
     <div
       class="route-map-canvas"
@@ -463,6 +602,8 @@ function renderRouteMapCanvas({ from, to, mode, label, externalUrl }) {
       data-route-mode="${escapeHtml(mode)}"
       data-route-label="${escapeHtml(label)}"
       data-external-url="${escapeHtml(externalUrl)}"
+      data-depart-at="${escapeHtml(departAt || "")}"
+      data-route-primary="${primary ? "true" : ""}"
       data-from-lat="${escapeHtml(routeCoordinate(from?.lat))}"
       data-from-lng="${escapeHtml(routeCoordinate(from?.lng))}"
       data-to-lat="${escapeHtml(routeCoordinate(to?.lat))}"
@@ -492,7 +633,8 @@ async function loadRouteMap(mapElement) {
     fromLng: mapElement.dataset.fromLng || "",
     toLat: mapElement.dataset.toLat || "",
     toLng: mapElement.dataset.toLng || "",
-    mode: mapElement.dataset.routeMode || "walk"
+    mode: mapElement.dataset.routeMode || "walk",
+    departAt: mapElement.dataset.departAt || ""
   });
   const cacheKey = params.toString();
 
@@ -538,28 +680,114 @@ function drawRouteMap(mapElement, route) {
     lineJoin: "round"
   }).addTo(map);
 
-  window.L.circleMarker(latLngs[0], {
-    radius: 6,
-    color,
-    weight: 3,
-    fillColor: "#ffffff",
-    fillOpacity: 1
+  window.L.marker(latLngs[0], {
+    icon: routeEndpointIcon("start", "출발"),
+    interactive: false,
+    keyboard: false,
+    zIndexOffset: 600
   }).addTo(map);
-  window.L.circleMarker(latLngs[latLngs.length - 1], {
-    radius: 7,
-    color: "#3c315b",
-    weight: 3,
-    fillColor: color,
-    fillOpacity: 1
+  window.L.marker(latLngs[latLngs.length - 1], {
+    icon: routeEndpointIcon("finish", "도착"),
+    interactive: false,
+    keyboard: false,
+    zIndexOffset: 700
   }).addTo(map);
 
-  map.fitBounds(polyline.getBounds(), { padding: [28, 28], maxZoom: 16 });
+  map.fitBounds(polyline.getBounds(), { padding: [72, 72], maxZoom: 16 });
   setTimeout(() => map.invalidateSize(), 60);
+  // 접기/펼치기 토글 후 타일 재계산을 위해 인스턴스를 보관.
+  mapElement._leafletMap = map;
 
+  const sourceLabel = route.durationSource === "kakao" ? "Kakao 실시간" : "추정";
   const summary = document.createElement("div");
   summary.className = "map-summary";
-  summary.textContent = `${routeProfileLabel(route.profile)} · ${formatMeters(route.distanceMeters)} · 약 ${formatSeconds(route.durationSeconds)}`;
+  summary.textContent = `${routeProfileLabel(route.profile)} · ${formatMeters(route.distanceMeters)} · 약 ${formatSeconds(route.durationSeconds)} · ${sourceLabel}`;
   mapElement.append(summary);
+
+  // 헤더 통일을 위해 도로 실측치를 지도 요소에 보관.
+  mapElement.dataset.roadDistanceMeters = String(route.distanceMeters || 0);
+  mapElement.dataset.roadDurationSeconds = String(route.durationSeconds || 0);
+  mapElement.dataset.roadDurationSource = route.durationSource || "estimate";
+
+  const card = mapElement.closest(".route-card");
+  if (mapElement.dataset.routePrimary === "true") {
+    // 기본 경로: 도로 거리/현실화 시간으로 헤더를 통일.
+    if (route.distanceMeters > 0 && route.durationSeconds > 0) {
+      writeCardEstimate(card, {
+        distanceMeters: route.distanceMeters,
+        durationSeconds: route.durationSeconds,
+        sourceLabel
+      });
+    }
+  } else if (mapElement.closest(".linked-parking")) {
+    // 주차 연계 경로: 차량(출발→주차장)+도보(주차장→목적지) 합산을 door-to-door로 표시.
+    applyParkingTotalToCard(card);
+  }
+}
+
+function routeEndpointIcon(type, label) {
+  return window.L.divIcon({
+    className: "route-marker-icon",
+    html: `<span class="route-marker ${type}" aria-hidden="true"><span class="route-marker-flag">${escapeHtml(label)}</span><span class="route-marker-pole"></span></span>`,
+    iconSize: [54, 42],
+    iconAnchor: [9, 38]
+  });
+}
+
+// 주차 연계 구간의 두 다리(차량+도보) 실측치를 합산해 헤더를 통일한다.
+function applyParkingTotalToCard(card) {
+  if (!card) return;
+  const legs = [...card.querySelectorAll(".linked-parking [data-live-route-map]")].filter(
+    (leg) => leg.dataset.roadDurationSeconds
+  );
+  if (!legs.length) return;
+
+  let distanceMeters = 0;
+  let durationSeconds = 0;
+  let hasKakao = false;
+  for (const leg of legs) {
+    distanceMeters += Number(leg.dataset.roadDistanceMeters) || 0;
+    durationSeconds += Number(leg.dataset.roadDurationSeconds) || 0;
+    if (leg.dataset.roadDurationSource === "kakao") hasKakao = true;
+  }
+  if (!(durationSeconds > 0)) return;
+
+  writeCardEstimate(card, {
+    distanceMeters,
+    durationSeconds,
+    sourceLabel: hasKakao ? "Kakao 실시간 포함" : "추정"
+  });
+}
+
+// 카드 헤더 상세·레일 시간·여유 뱃지를 실측 기반 값으로 통일.
+function writeCardEstimate(card, { distanceMeters, durationSeconds, sourceLabel }) {
+  if (!card) return;
+  const distanceText = formatMeters(distanceMeters);
+  const minutes = Math.max(1, Math.round(durationSeconds / 60));
+  const timeText = `${minutes}분`;
+
+  const available = Number(card.dataset.availableMinutes);
+  const availableLabel = Number.isFinite(available) ? `일정 간격 ${available}분` : "여유 시간 미확인";
+
+  const detail = card.querySelector(".route-detail");
+  if (detail) {
+    detail.textContent = `${distanceText} · 예상 ${timeText} · ${availableLabel} · ${sourceLabel}`;
+  }
+
+  const rail = card.querySelector(".route-rail span:last-child");
+  if (rail) rail.textContent = timeText;
+
+  if (Number.isFinite(available)) {
+    const tone = timingTone(minutes, available);
+    card.classList.remove("tight", "normal", "relaxed");
+    card.classList.add(tone);
+    const badge = card.querySelector(".route-badge");
+    if (badge) {
+      badge.classList.remove("tight", "normal", "relaxed");
+      badge.classList.add(tone);
+      badge.textContent = routeTimingLabel(tone);
+    }
+  }
 }
 
 function renderRouteMapStatus(mapElement, message) {
@@ -722,44 +950,45 @@ function renderTripDialog() {
           <button type="button" data-action="close-dialog" class="icon-button" aria-label="닫기">×</button>
         </div>
         <div class="grid-2">
-          <label>여행 지역 <input name="region" required placeholder="예: 부산시, 대구시, 전주" /></label>
-          <label>인원/구성 <input name="travelers" required value="4인 가족" /></label>
+          <label>여행 지역 <input name="region" placeholder="예: 부산시, 대구시, 전주" value="${escapeHtml(defaultTripRegion())}" /></label>
+          <label>숙소 주소 <input name="lodgingArea" placeholder="예: 부산 해운대구 해운대해변로 264" /></label>
         </div>
         <div class="grid-2">
-          <label>시작일 <input name="startDate" type="date" required value="2026-06-27" /></label>
-          <label>종료일 <input name="endDate" type="date" required value="2026-06-29" /></label>
+          <label>시작일 <input name="startDate" type="date" /></label>
+          <label>종료일 <input name="endDate" type="date" /></label>
         </div>
-        <div class="grid-2">
-          <label>아이/동행 특성 <input name="childrenAges" placeholder="예: 초등학생 2명, 부모 2명" /></label>
-          <label>숙소 위치 <input name="lodgingArea" placeholder="예: 해운대역 근처, 동성로 근처, 전주 한옥마을 근처" /></label>
-        </div>
-        <div class="grid-2">
-          <label>이동수단
-            <select name="transportMode">
-              <option value="car">자가용</option>
-              <option value="subway">대중교통</option>
-              <option value="taxi">택시</option>
-              <option value="walk">도보 중심</option>
-            </select>
+        <fieldset class="transport-toggle" aria-label="이동 방식">
+          <legend>이동 방식</legend>
+          <label class="transport-option">
+            <input type="radio" name="transportMode" value="car" checked />
+            <span>자가용</span>
           </label>
-          <label>여행 템포
-            <select name="pace">
-              <option value="보통">보통</option>
-              <option value="여유">여유</option>
-              <option value="촘촘">촘촘</option>
-            </select>
+          <label class="transport-option">
+            <input type="radio" name="transportMode" value="subway" />
+            <span>대중교통</span>
           </label>
-        </div>
-        <label>관심사 <textarea name="interests" rows="2">역사 관광지, 아이가 지루하지 않은 동선, 근처 맛집</textarea></label>
-        <div class="grid-2">
-          <label>음식 선호 <input name="foodPreferences" placeholder="예: 한식, 고기, 아이 메뉴" /></label>
-          <label>예산 <input name="budget" placeholder="예: 중간" /></label>
-        </div>
-        <label>피하고 싶은 것 <input name="avoid" placeholder="예: 긴 대기, 너무 긴 도보, 늦은 저녁" /></label>
+        </fieldset>
+        <label>요청사항
+          <textarea name="requests" rows="5" placeholder="예: 4인 가족(초등학생 2명), 역사 관광지 위주, 아이가 지루하지 않은 동선, 맛집투어, 긴 대기 피하기"></textarea>
+        </label>
         <button class="primary full" type="submit" ${generationDisabledAttr()}>${generationActionLabel("Ennoia로 일정 생성")}</button>
       </form>
     </dialog>
   `;
+}
+
+function defaultTripRegion() {
+  return currentState?.plan?.region || "";
+}
+
+function showTripDialog() {
+  const tripDialog = document.querySelector("#tripDialog");
+  if (!tripDialog) return;
+  const startDateInput = tripDialog.querySelector('[name="startDate"]');
+  const endDateInput = tripDialog.querySelector('[name="endDate"]');
+  if (startDateInput) startDateInput.value = "";
+  if (endDateInput) endDateInput.value = "";
+  tripDialog.showModal();
 }
 
 function renderAddAgentDialog() {
@@ -879,10 +1108,11 @@ document.addEventListener("click", async (event) => {
   if (!action) return;
 
   if (action === "refresh") await refresh();
-  if (action === "toggle-sidebar") setSidebarOpen(!sidebarOpen);
-  if (action === "close-sidebar") setSidebarOpen(false);
+  if (action === "toggle-chatbot") setChatbotOpen(!chatbotOpen);
+  if (action === "close-chatbot") setChatbotOpen(false);
+  if (action === "toggle-itinerary") setItineraryCollapsed(!itineraryCollapsed);
   if (action === "close-dialog") button.closest("dialog")?.close();
-  if (action === "open-trip" && !generationBusy) document.querySelector("#tripDialog").showModal();
+  if (action === "open-trip" && !generationBusy) showTripDialog();
   if (action === "select-day") {
     activeDate = button.dataset.date;
     render();
@@ -908,6 +1138,7 @@ document.addEventListener("submit", async (event) => {
   if (form.dataset.role === "trip-form") {
     if (generationBusy) return;
     const body = Object.fromEntries(new FormData(form).entries());
+    body.requests = String(body.requests || "").trim();
     document.querySelector("#tripDialog").close();
     generationBusy = true;
     generationError = "";
@@ -1039,8 +1270,15 @@ async function api(path, options = {}) {
     headers: options.body ? { "Content-Type": "application/json" } : undefined,
     body: options.body ? JSON.stringify(options.body) : undefined
   });
-  if (!response.ok) throw new Error(`API error ${response.status}`);
-  return response.json();
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(apiErrorMessage(payload, response.status));
+  return payload;
+}
+
+function apiErrorMessage(payload, status) {
+  const serverMessage = String(payload?.error || payload?.message || "").trim();
+  if (serverMessage) return serverMessage;
+  return `요청 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요. (${status})`;
 }
 
 async function applyPendingDraft(selectedRecommendationId = "") {
@@ -1112,8 +1350,8 @@ async function patch(path, body) {
 
 async function remove(path) {
   const response = await fetch(path, { method: "DELETE" });
-  if (!response.ok) throw new Error(`API error ${response.status}`);
-  const result = await response.json();
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(apiErrorMessage(result, response.status));
   currentState = result.state;
   ensureActiveDate();
   render();
@@ -1160,10 +1398,13 @@ function showManualAddDialog() {
 
 function scrollNaturalDraftIntoView() {
   if (!pendingDraft) return;
+  setChatbotOpen(true);
   requestAnimationFrame(() => {
+    const messages = document.querySelector(".chatbot-messages");
+    if (messages) messages.scrollTo({ top: messages.scrollHeight, behavior: "smooth" });
     document.querySelector(".draft-zone")?.scrollIntoView({
       behavior: "smooth",
-      block: "center"
+      block: "nearest"
     });
   });
 }
@@ -1217,9 +1458,11 @@ function ensureActiveDate() {
 }
 
 function planRangeLabel() {
-  const start = currentState.plan.startDate || currentState.plan.date;
-  const end = currentState.plan.endDate || currentState.plan.date;
-  return start === end ? formatDayLabel(start) : `${formatDayLabel(start)} - ${formatDayLabel(end)}`;
+  const days = getPlanDays();
+  const start = currentState.plan.startDate || currentState.plan.date || days[0]?.date;
+  const end = currentState.plan.endDate || currentState.plan.date || days.at(-1)?.date;
+  if (!start) return "일정 날짜 미정";
+  return start === end || !end ? formatDayLabel(start) : `${formatDayLabel(start)} - ${formatDayLabel(end)}`;
 }
 
 function dateKey(isoString) {

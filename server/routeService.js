@@ -1,4 +1,7 @@
+import { estimateTravelMinutes } from "../src/domain/routeSegments.js";
+
 const OSRM_BASE_URL = "https://router.project-osrm.org";
+const KAKAO_DIRECTIONS_URL = "https://apis-navi.kakaomobility.com/v1/directions";
 
 const MODE_TO_PROFILE = {
   walk: "foot",
@@ -8,7 +11,9 @@ const MODE_TO_PROFILE = {
   subway: "driving"
 };
 
-export async function fetchRouteGeometry({ fromLat, fromLng, toLat, toLng, mode = "walk" } = {}) {
+const CAR_LIKE_MODES = new Set(["car", "taxi"]);
+
+export async function fetchRouteGeometry({ fromLat, fromLng, toLat, toLng, mode = "walk", departAt } = {}) {
   const coordinates = [fromLat, fromLng, toLat, toLng].map(Number);
   if (!coordinates.every(Number.isFinite)) {
     return {
@@ -40,7 +45,15 @@ export async function fetchRouteGeometry({ fromLat, fromLng, toLat, toLng, mode 
         message: "도로 경로 조회에 실패했습니다."
       };
     }
-    return normalizeOsrmRoute(await response.json(), profile);
+    const route = normalizeOsrmRoute(await response.json(), profile);
+    return decorateWithRealisticDuration(route, {
+      mode,
+      departAt,
+      fromLat: startLat,
+      fromLng: startLng,
+      toLat: endLat,
+      toLng: endLng
+    });
   } catch (error) {
     return {
       source: "osrm",
@@ -89,6 +102,61 @@ export function normalizeOsrmRoute(payload, profile = "foot") {
     durationSeconds: Math.round(Number(route.duration) || 0),
     points
   };
+}
+
+// OSRM 도로 거리는 신뢰하되, 시간은 현실적으로 재계산한다.
+// - OSRM 데모 서버는 보행 프로파일이 없어 보행시간이 차량속도로 나오므로 항상 추정 모델로 덮어쓴다.
+// - 자가용/택시는 Kakao 모빌리티 실시간 ETA가 있으면 우선 사용한다.
+async function decorateWithRealisticDuration(route, ctx) {
+  if (route.status !== "ok" || !(route.distanceMeters > 0)) {
+    return { ...route, osrmDurationSeconds: route.durationSeconds ?? 0, durationSource: "estimate" };
+  }
+
+  const distanceKm = route.distanceMeters / 1000;
+  let durationSeconds = estimateTravelMinutes({ distanceKm, mode: ctx.mode, departAt: ctx.departAt }) * 60;
+  let durationSource = "estimate";
+
+  if (CAR_LIKE_MODES.has(String(ctx.mode || "").trim())) {
+    const kakao = await resolveCarEta(ctx);
+    if (kakao && Number.isFinite(kakao.durationSeconds) && kakao.durationSeconds > 0) {
+      durationSeconds = kakao.durationSeconds;
+      durationSource = "kakao";
+    }
+  }
+
+  return {
+    ...route,
+    osrmDurationSeconds: route.durationSeconds,
+    durationSeconds,
+    durationSource
+  };
+}
+
+// Kakao 모빌리티 길찾기로 실시간 교통이 반영된 자가용 ETA를 조회한다.
+async function resolveCarEta({ fromLat, fromLng, toLat, toLng }) {
+  const key = process.env.KAKAO_REST_API_KEY;
+  if (!key) return null;
+
+  const url = new URL(KAKAO_DIRECTIONS_URL);
+  url.searchParams.set("origin", `${coordinate(fromLng)},${coordinate(fromLat)}`);
+  url.searchParams.set("destination", `${coordinate(toLng)},${coordinate(toLat)}`);
+  url.searchParams.set("priority", "RECOMMEND");
+
+  try {
+    const response = await fetch(url, { headers: { Authorization: `KakaoAK ${key}` } });
+    if (!response.ok) return null;
+    const payload = await response.json();
+    const route = payload?.routes?.[0];
+    if (!route || route.result_code !== 0) return null;
+    const summary = route.summary;
+    if (!summary) return null;
+    return {
+      durationSeconds: Math.round(Number(summary.duration) || 0),
+      distanceMeters: Math.round(Number(summary.distance) || 0)
+    };
+  } catch {
+    return null;
+  }
 }
 
 function profileForMode(mode) {

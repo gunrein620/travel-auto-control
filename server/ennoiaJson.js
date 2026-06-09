@@ -1,13 +1,21 @@
 export function parseFirstBalancedJsonObject(text) {
+  const objects = parseBalancedJsonObjects(text);
+  if (objects.length > 0) return objects[0];
+
+  throw new Error("Ennoia response did not include JSON");
+}
+
+export function parseBalancedJsonObjects(text) {
   const source = String(text || "");
   if (!source.trim()) throw new Error("empty Ennoia response");
 
+  const objects = [];
   let start = source.indexOf("{");
   while (start >= 0) {
     const candidate = extractBalancedObject(source, start);
     if (candidate) {
       try {
-        return JSON.parse(candidate);
+        objects.push(JSON.parse(candidate));
       } catch {
         // Keep scanning: the first balanced braces might be explanatory text.
       }
@@ -15,7 +23,7 @@ export function parseFirstBalancedJsonObject(text) {
     start = source.indexOf("{", start + 1);
   }
 
-  throw new Error("Ennoia response did not include JSON");
+  return objects;
 }
 
 function extractBalancedObject(source, start) {

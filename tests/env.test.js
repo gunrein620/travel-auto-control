@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -37,6 +37,20 @@ test("loadEnvFile loads .env values without overriding existing process env", as
     delete process.env.LIVE_WEATHER;
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test(".env.example points trip generation at the stable preset judgment engine", async () => {
+  const source = await readFile(new URL("../.env.example", import.meta.url), "utf8");
+
+  assert.match(
+    source,
+    /ENNOIA_TRIP_GENERATION_ENDPOINT=https:\/\/api\.ennoia\.so\/api\/preset\/v2\/chat\/completions/
+  );
+  assert.match(source, /ENNOIA_PROJECT_ID=KNTO-PROMPTON-2026-544/);
+  assert.match(source, /^ENNOIA_API_KEY=$/m);
+  assert.match(source, /^ENNOIA_TRIP_GENERATION_HASH=<tripAgentHash>$/m);
+  assert.match(source, /^ENNOIA_TRIP_GENERATION_TIMEOUT_MS=60000$/m);
+  assert.doesNotMatch(source, /llm-orchestrator\/chat\/stream\/1ff5980a3d/);
 });
 
 function restoreEnv(name, value) {

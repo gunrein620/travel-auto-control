@@ -70,8 +70,112 @@ test("fetchRouteGeometry calls OSRM with live coordinates and no API key", async
     assert.equal(result.status, "ok");
     assert.equal(result.profile, "foot");
     assert.equal(result.points.length, 2);
+    // OSRM 데모는 보행시간을 차량속도(600s)로 내므로 도로거리 기반으로 재추정한다.
+    assert.equal(result.osrmDurationSeconds, 600);
+    assert.equal(result.durationSource, "estimate");
+    assert.ok(result.durationSeconds > 600, `walk 800m should be slower than OSRM car-speed, got ${result.durationSeconds}`);
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test("fetchRouteGeometry uses Kakao Mobility ETA for car routes when a key is set", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalKey = process.env.KAKAO_REST_API_KEY;
+  process.env.KAKAO_REST_API_KEY = "test-key";
+
+  globalThis.fetch = async (url, options) => {
+    const target = String(url);
+    if (target.includes("router.project-osrm.org")) {
+      return {
+        ok: true,
+        json: async () => ({
+          code: "Ok",
+          routes: [
+            {
+              distance: 5000,
+              duration: 300,
+              geometry: { coordinates: [[129.06, 35.17], [129.1, 35.18]] }
+            }
+          ]
+        })
+      };
+    }
+    if (target.includes("apis-navi.kakaomobility.com")) {
+      assert.equal(options.headers.Authorization, "KakaoAK test-key");
+      return {
+        ok: true,
+        json: async () => ({ routes: [{ result_code: 0, summary: { duration: 1200, distance: 5200 } }] })
+      };
+    }
+    throw new Error(`unexpected url ${target}`);
+  };
+
+  try {
+    const result = await fetchRouteGeometry({
+      fromLat: 35.17,
+      fromLng: 129.06,
+      toLat: 35.18,
+      toLng: 129.1,
+      mode: "car",
+      departAt: "2026-06-29T18:00:00+09:00"
+    });
+
+    assert.equal(result.status, "ok");
+    assert.equal(result.durationSource, "kakao");
+    assert.equal(result.durationSeconds, 1200);
+    assert.equal(result.distanceMeters, 5000);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalKey === undefined) delete process.env.KAKAO_REST_API_KEY;
+    else process.env.KAKAO_REST_API_KEY = originalKey;
+  }
+});
+
+test("fetchRouteGeometry falls back to a heuristic car estimate without a Kakao key", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalKey = process.env.KAKAO_REST_API_KEY;
+  delete process.env.KAKAO_REST_API_KEY;
+
+  let kakaoCalls = 0;
+  globalThis.fetch = async (url) => {
+    const target = String(url);
+    if (target.includes("apis-navi.kakaomobility.com")) kakaoCalls += 1;
+    if (target.includes("router.project-osrm.org")) {
+      return {
+        ok: true,
+        json: async () => ({
+          code: "Ok",
+          routes: [
+            {
+              distance: 5000,
+              duration: 300,
+              geometry: { coordinates: [[129.06, 35.17], [129.1, 35.18]] }
+            }
+          ]
+        })
+      };
+    }
+    throw new Error(`unexpected url ${target}`);
+  };
+
+  try {
+    const result = await fetchRouteGeometry({
+      fromLat: 35.17,
+      fromLng: 129.06,
+      toLat: 35.18,
+      toLng: 129.1,
+      mode: "car",
+      departAt: "2026-06-29T18:00:00+09:00"
+    });
+
+    assert.equal(result.durationSource, "estimate");
+    assert.equal(kakaoCalls, 0);
+    assert.ok(result.durationSeconds > 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalKey === undefined) delete process.env.KAKAO_REST_API_KEY;
+    else process.env.KAKAO_REST_API_KEY = originalKey;
   }
 });
 

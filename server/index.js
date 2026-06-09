@@ -74,7 +74,8 @@ async function handleApi(request, response, url) {
       fromLng: url.searchParams.get("fromLng"),
       toLat: url.searchParams.get("toLat"),
       toLng: url.searchParams.get("toLng"),
-      mode: url.searchParams.get("mode") || "walk"
+      mode: url.searchParams.get("mode") || "walk",
+      departAt: url.searchParams.get("departAt") || ""
     });
     sendJson(response, 200, route);
     return;
@@ -82,6 +83,14 @@ async function handleApi(request, response, url) {
 
   if (request.method === "POST" && url.pathname === "/api/trips/generate") {
     const generation = await generateItineraryPlan(await readJson(request));
+    if (!hasGeneratedItems(generation)) {
+      sendJson(response, 422, {
+        error: buildEmptyGenerationMessage(generation),
+        generation,
+        state: getState()
+      });
+      return;
+    }
     replacePlanWithGeneratedTrip(generation);
     sendJson(response, 200, { generation, state: getState() });
     return;
@@ -214,6 +223,16 @@ function sendJson(response, status, body) {
   response.end(JSON.stringify(body));
 }
 
+function hasGeneratedItems(generation) {
+  return Array.isArray(generation?.items) && generation.items.length > 0;
+}
+
+function buildEmptyGenerationMessage(generation) {
+  const warnings = generation?.trip?.warnings || [];
+  const regionHint = warnings.find((warning) => /지역|구체화|지원 지역/.test(warning));
+  return regionHint || "일정을 만들 수 있는 장소가 확정되지 않았습니다. 지역이나 여행지를 더 구체화해 주세요.";
+}
+
 async function serveStatic(response, pathname) {
   const cleanPath = normalize(pathname === "/" ? "/index.html" : pathname).replace(/^(\.\.[/\\])+/, "");
   const filePath = join(rootDir, cleanPath);
@@ -223,9 +242,10 @@ async function serveStatic(response, pathname) {
     return;
   }
   const type = contentType(extname(filePath));
+  const cacheControl = filePath.endsWith("index.html") || filePath.endsWith("sw.js") ? "no-store" : "public, max-age=60";
   response.writeHead(200, {
     "Content-Type": type,
-    "Cache-Control": filePath.endsWith("sw.js") ? "no-store" : "public, max-age=60"
+    "Cache-Control": cacheControl
   });
   createReadStream(filePath).pipe(response);
 }

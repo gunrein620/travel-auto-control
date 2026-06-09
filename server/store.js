@@ -44,6 +44,7 @@ export function replacePlanWithGeneratedTrip(generation) {
       modelStatus: generation.trip.modelStatus,
       apiStatus: generation.trip.apiStatus,
       evidence: generation.trip.evidence,
+      eventSuggestions: generation.trip.eventSuggestions || [],
       warnings: generation.trip.warnings,
       generatedAt: generation.trip.generatedAt
     },
