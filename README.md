@@ -96,7 +96,7 @@ sh scripts/test.sh
 sh scripts/verify-mvp.sh
 ```
 
-최근 로컬 테스트 결과: `sh scripts/test.sh` 기준 100개 통과, 0개 실패.
+최근 로컬 테스트 결과: `sh scripts/test.sh` 기준 157개 통과, 0개 실패.
 
 ## Ennoia 자연어 일정 수정 연결
 
@@ -113,6 +113,12 @@ sh scripts/dev.sh
 ```
 
 서버는 Ennoia 응답을 그대로 적용하지 않고 현재 플래너에 존재하는 `targetItemId`인지 확인한 뒤, 허용된 patch 필드만 반영합니다. 자연어 수정은 Ennoia Studio에 설정된 수정 에이전트가 질문/수정/추가질문을 먼저 판단하고, `ENNOIA_NATURAL_EDIT_CHAT_WAIT_MS` 안에 응답하지 못하거나 호출이 실패할 때만 로컬 fallback 초안을 반환합니다. API 키와 원문 JSON은 사용자 화면에 노출하지 않습니다.
+
+자연어 입력은 의도에 따라 티키타카(질문-응답) 흐름으로 분기합니다.
+
+- 일정에 대한 질문(`드론쇼 몇 시야?`, `점심 어디서 먹어?`)은 수정 patch를 만들지 않고 플래너 맥락 기반 답변만 반환합니다 (`server/naturalEditQuestionService.js`).
+- 축제/행사 추가 요청(`부산 가볼만한 축제 추가해줘`)은 KTO 행사정보를 조회해 기간·지역에 맞는 후보를 찾아 일정에 넣을 수 있게 제안합니다 (`server/festivalScoutService.js`).
+- 대상이 모호하면 단정하지 않고 추가 질문으로 되물은 뒤, 사용자의 확인 응답을 받아 수정을 적용합니다.
 
 자연어 수정 에이전트에 MCP 툴이 연결되어 있으면 Ennoia API가 MCP 연결 소유자를 알아야 합니다. 운영 환경에는 아래 중 하나를 추가로 설정합니다.
 
