@@ -933,6 +933,683 @@ test("generateItineraryPlan treats an evening dinner block as covered even when 
   }
 });
 
+test("generateItineraryPlan repairs same-day overlapping items from Ennoia", async () => {
+  const originalFetch = globalThis.fetch;
+  const env = snapshotEnv([
+    "ENNOIA_TRIP_GENERATION_ENDPOINT",
+    "ENNOIA_TRIP_GENERATION_HASH",
+    "ENNOIA_NATURAL_EDIT_ENDPOINT",
+    "ENNOIA_API_KEY",
+    "KTO_SERVICE_KEY"
+  ]);
+
+  process.env.ENNOIA_TRIP_GENERATION_ENDPOINT = "https://api.ennoia.test/api/preset/v2/chat/completions";
+  process.env.ENNOIA_TRIP_GENERATION_HASH = "agent-hash";
+  process.env.ENNOIA_API_KEY = "secret-key";
+  delete process.env.KTO_SERVICE_KEY;
+
+  globalThis.fetch = async () => ({
+    ok: true,
+    headers: { get: () => "application/json" },
+    json: async () => ({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({
+              title: "고양 겹침 보정 일정",
+              days: [
+                {
+                  date: "2026-06-13",
+                  title: "행주산성 주변",
+                  items: [
+                    tripItemForDate("2026-06-13", "15:00", "18:30", "행주산성 역사공원 오후 산책", "행주산성 역사공원", "outdoor"),
+                    tripItemForDate("2026-06-13", "17:50", "18:50", "행주산성 카페 휴식", "행주산성 카페 리오리코", "meal")
+                  ]
+                }
+              ],
+              eventSuggestions: [],
+              warnings: [],
+              apiStatus: []
+            })
+          }
+        }
+      ]
+    })
+  });
+
+  try {
+    const generation = await generateItineraryPlan({
+      region: "고양시",
+      startDate: "2026-06-13",
+      endDate: "2026-06-13",
+      requests: "",
+      transportMode: "car"
+    });
+
+    const cafe = generation.items.find((item) => item.title === "행주산성 카페 휴식");
+    assert.equal(cafe.startsAt, "2026-06-13T18:45:00+09:00");
+    assert.equal(cafe.endsAt, "2026-06-13T19:45:00+09:00");
+    assert.ok(generation.trip.warnings.some((warning) => /겹친 일정 시간 보정/.test(warning)));
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv(env);
+  }
+});
+
+test("generateItineraryPlan injects a matching KTO festival highlight when Ennoia omits festival items", async () => {
+  const originalFetch = globalThis.fetch;
+  const env = snapshotEnv([
+    "ENNOIA_TRIP_GENERATION_ENDPOINT",
+    "ENNOIA_TRIP_GENERATION_HASH",
+    "ENNOIA_NATURAL_EDIT_ENDPOINT",
+    "ENNOIA_API_KEY",
+    "KTO_SERVICE_KEY"
+  ]);
+
+  process.env.ENNOIA_TRIP_GENERATION_ENDPOINT = "https://api.ennoia.test/api/preset/v2/chat/completions";
+  process.env.ENNOIA_TRIP_GENERATION_HASH = "agent-hash";
+  process.env.ENNOIA_API_KEY = "secret-key";
+  process.env.KTO_SERVICE_KEY = "kto-key";
+
+  globalThis.fetch = async (url, options = {}) => {
+    const parsed = new URL(url);
+    if (parsed.hostname === "apis.data.go.kr") {
+      if (parsed.pathname.endsWith("/searchFestival2") && parsed.searchParams.get("areaCode") === "31") {
+        return ktoResponse({ totalCount: 0, item: [] });
+      }
+
+      if (parsed.pathname.endsWith("/searchFestival2")) {
+        return ktoResponse({
+          totalCount: 1,
+          item: {
+            contentid: "530450",
+            contenttypeid: "15",
+            title: "고양행주문화제",
+            addr1: "경기도 고양시 덕양구 행주로15번길 89 (행주외동)",
+            eventstartdate: "20260613",
+            eventenddate: "20260614",
+            mapx: "126.8245886711",
+            mapy: "37.6004267743",
+            areacode: "",
+            sigungucode: ""
+          }
+        });
+      }
+
+      if (parsed.pathname.endsWith("/searchKeyword2")) {
+        return ktoResponse({ totalCount: 0, item: [] });
+      }
+
+      if (parsed.pathname.endsWith("/detailIntro2")) {
+        return ktoResponse({
+          totalCount: 1,
+          item: {
+            contentid: "530450",
+            eventstartdate: "20260613",
+            eventenddate: "20260614",
+            playtime: "15:00~21:00",
+            eventplace: "행주산성역사공원 및 행주산성 일원",
+            program: "대표프로그램, 공연프로그램, 체험 프로그램",
+            usetimefestival: "무료"
+          }
+        });
+      }
+    }
+
+    assert.equal(String(url), "https://api.ennoia.test/api/preset/v2/chat/completions");
+    const body = JSON.parse(options.body);
+    assert.match(body.messages[0].content[0].text, /고양행주문화제/);
+    assert.match(body.messages[0].content[0].text, /행주 드론불꽃쇼/);
+
+    return {
+      ok: true,
+      headers: { get: () => "application/json" },
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                title: "고양시 축제 공연 중심 2박3일",
+                days: [
+                  {
+                    date: "2026-06-13",
+                    title: "행주산성 주변 적응",
+                    items: [
+                      tripItemForDate("2026-06-13", "10:00", "12:00", "행주산성 산책", "행주산성", "outdoor"),
+                      tripItemForDate("2026-06-13", "12:20", "13:20", "행주산성 인근 점심", "원조국수집", "meal"),
+                      tripItemForDate("2026-06-13", "15:00", "17:00", "역사공원 산책", "행주산성역사공원", "outdoor"),
+                      tripItemForDate("2026-06-13", "18:00", "19:00", "저녁 식사", "행주산성 원조국수집", "meal")
+                    ]
+                  },
+                  {
+                    date: "2026-06-14",
+                    title: "고양 문화시설",
+                    items: [tripItemForDate("2026-06-14", "10:00", "12:00", "고양아람누리 관람", "고양아람누리", "indoor")]
+                  },
+                  {
+                    date: "2026-06-15",
+                    title: "귀가 전 정리",
+                    items: [tripItemForDate("2026-06-15", "10:00", "11:30", "마두역 주변 정리", "마두역", "indoor")]
+                  }
+                ],
+                evidence: ["KTO 관광정보만 반영"],
+                warnings: [],
+                eventSuggestions: [],
+                apiStatus: ["KTO 관광정보 성공", "KTO 행사정보 0건"]
+              })
+            }
+          }
+        ]
+      })
+    };
+  };
+
+  try {
+    const generation = await generateItineraryPlan({
+      region: "고양시",
+      startDate: "2026-06-13",
+      endDate: "2026-06-15",
+      requests: "축제 공연 중심 여행, 드론 불꽃쇼도 보고 싶어",
+      transportMode: "car"
+    });
+
+    assert.ok(generation.trip.eventSuggestions.some((event) => event.title === "고양행주문화제"));
+    const drone = generation.items.find((item) => item.title === "행주 드론불꽃쇼 관람");
+    assert.ok(drone, "드론불꽃쇼 일정 item이 생성되어야 합니다.");
+    assert.equal(drone.startsAt, "2026-06-13T20:20:00+09:00");
+    assert.equal(drone.endsAt, "2026-06-13T21:10:00+09:00");
+    assert.equal(drone.placeName, "행주산성역사공원");
+    assert.ok(generation.trip.apiStatus.some((status) => /전국 재검색/.test(status)));
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv(env);
+  }
+});
+
+test("generateItineraryPlan aligns an existing festival item to the precise KTO highlight time", async () => {
+  const originalFetch = globalThis.fetch;
+  const env = snapshotEnv([
+    "ENNOIA_TRIP_GENERATION_ENDPOINT",
+    "ENNOIA_TRIP_GENERATION_HASH",
+    "ENNOIA_NATURAL_EDIT_ENDPOINT",
+    "ENNOIA_API_KEY",
+    "KTO_SERVICE_KEY"
+  ]);
+
+  process.env.ENNOIA_TRIP_GENERATION_ENDPOINT = "https://api.ennoia.test/api/preset/v2/chat/completions";
+  process.env.ENNOIA_TRIP_GENERATION_HASH = "agent-hash";
+  process.env.ENNOIA_API_KEY = "secret-key";
+  process.env.KTO_SERVICE_KEY = "kto-key";
+
+  globalThis.fetch = async (url) => {
+    const parsed = new URL(url);
+    if (parsed.hostname === "apis.data.go.kr") {
+      if (parsed.pathname.endsWith("/searchFestival2") && parsed.searchParams.get("areaCode") === "31") {
+        return ktoResponse({ totalCount: 0, item: [] });
+      }
+
+      if (parsed.pathname.endsWith("/searchFestival2")) {
+        return ktoResponse({
+          totalCount: 1,
+          item: {
+            contentid: "530450",
+            contenttypeid: "15",
+            title: "고양행주문화제",
+            addr1: "경기도 고양시 덕양구 행주로15번길 89 (행주외동)",
+            eventstartdate: "20260613",
+            eventenddate: "20260614",
+            mapx: "126.8245886711",
+            mapy: "37.6004267743"
+          }
+        });
+      }
+
+      if (parsed.pathname.endsWith("/searchKeyword2")) {
+        return ktoResponse({ totalCount: 0, item: [] });
+      }
+
+      if (parsed.pathname.endsWith("/detailIntro2")) {
+        return ktoResponse({
+          totalCount: 1,
+          item: {
+            contentid: "530450",
+            eventstartdate: "20260613",
+            eventenddate: "20260614",
+            playtime: "15:00~21:00",
+            eventplace: "행주산성역사공원 및 행주산성 일원",
+            program: "대표프로그램, 공연프로그램, 체험 프로그램"
+          }
+        });
+      }
+    }
+
+    return {
+      ok: true,
+      headers: { get: () => "application/json" },
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                title: "고양시 고양행주문화제 중심 2박3일",
+                days: [
+                  {
+                    date: "2026-06-13",
+                    title: "행주 야간 축제",
+                    items: [
+                      tripItemForDate("2026-06-13", "10:00", "12:00", "행주산성 산책", "행주산성", "outdoor"),
+                      tripItemForDate("2026-06-13", "12:10", "13:10", "행주산성 점심", "행주산성먹거리촌", "meal"),
+                      tripItemForDate("2026-06-13", "15:00", "18:30", "고양행주문화제 즐기기", "행주산성역사공원", "outdoor"),
+                      tripItemForDate("2026-06-13", "19:30", "21:10", "행주 드론불꽃쇼 관람 및 야간 간단 식사", "행주산성역사공원", "meal")
+                    ]
+                  },
+                  {
+                    date: "2026-06-14",
+                    title: "고양 여유",
+                    items: [
+                      tripItemForDate("2026-06-14", "10:00", "12:00", "행주산성 재방문", "행주산성", "outdoor"),
+                      tripItemForDate("2026-06-14", "17:30", "21:10", "고양행주문화제 2일차와 드론불꽃쇼", "행주산성역사공원", "outdoor")
+                    ]
+                  },
+                  {
+                    date: "2026-06-15",
+                    title: "귀가",
+                    items: [tripItemForDate("2026-06-15", "10:00", "11:30", "카페 브런치", "행주산성역사공원", "meal")]
+                  }
+                ],
+                eventSuggestions: [],
+                warnings: [],
+                apiStatus: []
+              })
+            }
+          }
+        ]
+      })
+    };
+  };
+
+  try {
+    const generation = await generateItineraryPlan({
+      region: "고양시",
+      startDate: "2026-06-13",
+      endDate: "2026-06-15",
+      requests: "축제 공연 중심 여행. 드론불꽃쇼는 밤 8시 35분경으로 맞춰줘",
+      transportMode: "car"
+    });
+
+    const droneItems = generation.items.filter((item) => /드론불꽃쇼/.test(item.title));
+    assert.equal(droneItems.length, 2);
+    assert.ok(
+      droneItems.some((item) => item.title === "행주 드론불꽃쇼 관람" && item.startsAt === "2026-06-13T20:20:00+09:00" && item.endsAt === "2026-06-13T21:10:00+09:00")
+    );
+    assert.ok(
+      droneItems.some((item) => item.title === "행주 드론불꽃쇼 관람" && item.startsAt === "2026-06-14T20:20:00+09:00" && item.endsAt === "2026-06-14T21:10:00+09:00")
+    );
+    assert.ok(generation.trip.warnings.some((warning) => /행사 시간 보정/.test(warning)));
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv(env);
+  }
+});
+
+test("generateItineraryPlan still returns a KTO festival item for unsupported regions", async () => {
+  const originalFetch = globalThis.fetch;
+  const env = snapshotEnv([
+    "ENNOIA_TRIP_GENERATION_ENDPOINT",
+    "ENNOIA_TRIP_GENERATION_HASH",
+    "ENNOIA_NATURAL_EDIT_ENDPOINT",
+    "ENNOIA_API_KEY",
+    "KTO_SERVICE_KEY"
+  ]);
+
+  delete process.env.ENNOIA_TRIP_GENERATION_ENDPOINT;
+  delete process.env.ENNOIA_NATURAL_EDIT_ENDPOINT;
+  delete process.env.ENNOIA_API_KEY;
+  process.env.KTO_SERVICE_KEY = "kto-key";
+
+  globalThis.fetch = async (url) => {
+    const parsed = new URL(url);
+    if (parsed.hostname !== "apis.data.go.kr") throw new Error(`unexpected URL: ${url}`);
+
+    if (parsed.pathname.endsWith("/searchFestival2") && parsed.searchParams.get("areaCode") === "36") {
+      return ktoResponse({
+        totalCount: 1,
+        item: {
+          contentid: "2755016",
+          contenttypeid: "15",
+          title: "강주해바라기 축제",
+          addr1: "경상남도 함안군 강주4길 16",
+          eventstartdate: "20260618",
+          eventenddate: "20260702",
+          mapx: "128.4142",
+          mapy: "35.3315"
+        }
+      });
+    }
+
+    if (parsed.pathname.endsWith("/searchFestival2")) {
+      return ktoResponse({ totalCount: 0, item: [] });
+    }
+
+    if (parsed.pathname.endsWith("/searchKeyword2")) {
+      return ktoResponse({ totalCount: 0, item: [] });
+    }
+
+    if (parsed.pathname.endsWith("/detailIntro2")) {
+      return ktoResponse({
+        totalCount: 1,
+        item: {
+          contentid: "2755016",
+          eventstartdate: "20260618",
+          eventenddate: "20260702",
+          playtime: "09:00~18:00",
+          eventplace: "강주마을 일원",
+          program: "해바라기 관람 및 체험 프로그램"
+        }
+      });
+    }
+
+    throw new Error(`unexpected KTO URL: ${url}`);
+  };
+
+  try {
+    const generation = await generateItineraryPlan({
+      region: "함안군",
+      startDate: "2026-06-18",
+      endDate: "2026-06-19",
+      requests: "경상남도 함안군 강주해바라기 축제 가고 싶어",
+      transportMode: "car"
+    });
+
+    assert.equal(generation.trip.source, "fallback");
+    assert.ok(generation.trip.eventSuggestions.some((event) => event.title === "강주해바라기 축제"));
+    assert.ok(generation.items.some((item) => item.title === "강주해바라기 축제 관람"));
+    assert.ok(generation.trip.apiStatus.some((status) => /KTO 행사 주소 필터/.test(status)));
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv(env);
+  }
+});
+
+test("generateItineraryPlan auto-attaches the only local festival candidate for date and region requests", async () => {
+  const originalFetch = globalThis.fetch;
+  const env = snapshotEnv([
+    "ENNOIA_TRIP_GENERATION_ENDPOINT",
+    "ENNOIA_TRIP_GENERATION_HASH",
+    "ENNOIA_NATURAL_EDIT_ENDPOINT",
+    "ENNOIA_API_KEY",
+    "KTO_SERVICE_KEY"
+  ]);
+
+  delete process.env.ENNOIA_TRIP_GENERATION_ENDPOINT;
+  delete process.env.ENNOIA_NATURAL_EDIT_ENDPOINT;
+  delete process.env.ENNOIA_API_KEY;
+  process.env.KTO_SERVICE_KEY = "kto-key";
+
+  globalThis.fetch = async (url) => {
+    const parsed = new URL(url);
+    if (parsed.hostname !== "apis.data.go.kr") throw new Error(`unexpected URL: ${url}`);
+
+    if (parsed.pathname.endsWith("/searchFestival2") && parsed.searchParams.get("areaCode") === "31") {
+      return ktoResponse({ totalCount: 0, item: [] });
+    }
+
+    if (parsed.pathname.endsWith("/searchFestival2")) {
+      return ktoResponse({
+        totalCount: 1,
+        item: {
+          contentid: "530450",
+          contenttypeid: "15",
+          title: "고양행주문화제",
+          addr1: "경기도 고양시 덕양구 행주로15번길 89 (행주외동)",
+          eventstartdate: "20260613",
+          eventenddate: "20260614",
+          mapx: "126.8245886711",
+          mapy: "37.6004267743"
+        }
+      });
+    }
+
+    if (parsed.pathname.endsWith("/searchKeyword2")) {
+      return ktoResponse({ totalCount: 0, item: [] });
+    }
+
+    if (parsed.pathname.endsWith("/detailIntro2")) {
+      return ktoResponse({
+        totalCount: 1,
+        item: {
+          contentid: "530450",
+          eventstartdate: "20260613",
+          eventenddate: "20260614",
+          playtime: "15:00~21:00",
+          eventplace: "행주산성역사공원 및 행주산성 일원",
+          program: "대표프로그램, 공연프로그램, 체험 프로그램"
+        }
+      });
+    }
+
+    throw new Error(`unexpected KTO URL: ${url}`);
+  };
+
+  try {
+    const generation = await generateItineraryPlan({
+      region: "고양시",
+      startDate: "2026-06-13",
+      endDate: "2026-06-15",
+      requests: "",
+      transportMode: "car"
+    });
+
+    assert.ok(generation.trip.eventSuggestions.some((event) => event.title === "고양행주문화제"));
+    const droneItems = generation.items.filter((item) => item.title === "행주 드론불꽃쇼 관람");
+    assert.equal(droneItems.length, 2);
+    assert.ok(droneItems.some((item) => item.startsAt === "2026-06-13T20:20:00+09:00"));
+    assert.ok(droneItems.some((item) => item.startsAt === "2026-06-14T20:20:00+09:00"));
+    assert.ok(generation.trip.apiStatus.some((status) => /KTO searchFestival2 전국 재검색 결과 1건/.test(status)));
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv(env);
+  }
+});
+
+test("generateItineraryPlan prioritizes the requested event title over generic show matches", async () => {
+  const originalFetch = globalThis.fetch;
+  const env = snapshotEnv([
+    "ENNOIA_TRIP_GENERATION_ENDPOINT",
+    "ENNOIA_TRIP_GENERATION_HASH",
+    "ENNOIA_NATURAL_EDIT_ENDPOINT",
+    "ENNOIA_API_KEY",
+    "KTO_SERVICE_KEY"
+  ]);
+
+  delete process.env.ENNOIA_TRIP_GENERATION_ENDPOINT;
+  delete process.env.ENNOIA_NATURAL_EDIT_ENDPOINT;
+  delete process.env.ENNOIA_API_KEY;
+  process.env.KTO_SERVICE_KEY = "kto-key";
+
+  globalThis.fetch = async (url) => {
+    const parsed = new URL(url);
+    if (parsed.hostname !== "apis.data.go.kr") throw new Error(`unexpected URL: ${url}`);
+
+    if (parsed.pathname.endsWith("/searchFestival2") && parsed.searchParams.get("areaCode") === "6") {
+      return ktoResponse({
+        totalCount: 2,
+        item: [
+          {
+            contentid: "2390168",
+            contenttypeid: "15",
+            title: "부산원아시아페스티벌(BOF) with NOL",
+            addr1: "부산광역시 연제구 월드컵대로 344 (거제동)",
+            eventstartdate: "20260627",
+            eventenddate: "20260628",
+            mapx: "129.0603",
+            mapy: "35.191"
+          },
+          {
+            contentid: "2786391",
+            contenttypeid: "15",
+            title: "광안리 M(Marvelous) 드론 라이트쇼",
+            addr1: "부산광역시 수영구 광안해변로 219 (광안동)",
+            eventstartdate: "20260101",
+            eventenddate: "20261231",
+            mapx: "129.1186",
+            mapy: "35.1532"
+          }
+        ]
+      });
+    }
+
+    if (parsed.pathname.endsWith("/searchFestival2")) {
+      return ktoResponse({ totalCount: 0, item: [] });
+    }
+
+    if (parsed.pathname.endsWith("/searchKeyword2")) {
+      return ktoResponse({ totalCount: 0, item: [] });
+    }
+
+    if (parsed.pathname.endsWith("/detailIntro2")) {
+      const contentId = parsed.searchParams.get("contentId");
+      return ktoResponse({
+        totalCount: 1,
+        item: {
+          contentid: contentId,
+          eventstartdate: contentId === "2390168" ? "20260627" : "20260101",
+          eventenddate: contentId === "2390168" ? "20260628" : "20261231",
+          playtime: contentId === "2390168" ? "13:00~21:00" : "20:00~22:00",
+          eventplace: contentId === "2390168" ? "부산아시아드주경기장" : "광안리 해변 일원",
+          program: contentId === "2390168" ? "K-POP 공연" : "드론 라이트쇼"
+        }
+      });
+    }
+
+    throw new Error(`unexpected KTO URL: ${url}`);
+  };
+
+  try {
+    const generation = await generateItineraryPlan({
+      region: "부산",
+      startDate: "2026-06-27",
+      endDate: "2026-06-28",
+      requests: "부산원아시아페스티벌 공연 중심 여행으로 만들어줘",
+      transportMode: "car"
+    });
+
+    assert.ok(generation.trip.eventSuggestions.some((event) => /부산원아시아페스티벌/.test(event.title)));
+    assert.ok(generation.items.some((item) => /부산원아시아페스티벌/.test(item.title)));
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv(env);
+  }
+});
+
+test("generateItineraryPlan shifts following items to keep a buffer after fixed festival times", async () => {
+  const originalFetch = globalThis.fetch;
+  const env = snapshotEnv([
+    "ENNOIA_TRIP_GENERATION_ENDPOINT",
+    "ENNOIA_TRIP_GENERATION_HASH",
+    "ENNOIA_NATURAL_EDIT_ENDPOINT",
+    "ENNOIA_API_KEY",
+    "KTO_SERVICE_KEY"
+  ]);
+
+  process.env.ENNOIA_TRIP_GENERATION_ENDPOINT = "https://api.ennoia.test/api/preset/v2/chat/completions";
+  process.env.ENNOIA_TRIP_GENERATION_HASH = "agent-hash";
+  process.env.ENNOIA_API_KEY = "secret-key";
+  process.env.KTO_SERVICE_KEY = "kto-key";
+
+  globalThis.fetch = async (url) => {
+    const parsed = new URL(url);
+    if (parsed.hostname === "apis.data.go.kr") {
+      if (parsed.pathname.endsWith("/searchFestival2")) {
+        return ktoResponse({
+          totalCount: 1,
+          item: {
+            contentid: "2390168",
+            contenttypeid: "15",
+            title: "부산원아시아페스티벌(BOF) with NOL",
+            addr1: "부산광역시 연제구 월드컵대로 344 (거제동)",
+            eventstartdate: "20260627",
+            eventenddate: "20260628",
+            mapx: "129.0603",
+            mapy: "35.191"
+          }
+        });
+      }
+
+      if (parsed.pathname.endsWith("/searchKeyword2")) {
+        return ktoResponse({ totalCount: 0, item: [] });
+      }
+
+      if (parsed.pathname.endsWith("/detailIntro2")) {
+        return ktoResponse({
+          totalCount: 1,
+          item: {
+            contentid: "2390168",
+            eventstartdate: "20260627",
+            eventenddate: "20260628",
+            playtime: "13:00~21:00",
+            eventplace: "부산아시아드주경기장",
+            program: "K-POP 공연"
+          }
+        });
+      }
+    }
+
+    return {
+      ok: true,
+      headers: { get: () => "application/json" },
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                title: "부산 BOF 여행",
+                days: [
+                  {
+                    date: "2026-06-27",
+                    title: "BOF 관람",
+                    items: [
+                      tripItemForDate("2026-06-27", "11:30", "12:30", "부산 도착 및 점심", "센텀시티", "meal"),
+                      tripItemForDate("2026-06-27", "13:00", "21:00", "부산원아시아페스티벌(BOF) with NOL 관람", "부산아시아드주경기장", "outdoor"),
+                      tripItemForDate("2026-06-27", "21:00", "22:00", "광안리 저녁 식사", "광안리해수욕장", "meal")
+                    ]
+                  },
+                  {
+                    date: "2026-06-28",
+                    title: "귀가",
+                    items: [tripItemForDate("2026-06-28", "10:00", "11:00", "해운대 산책", "해운대해수욕장", "outdoor")]
+                  }
+                ],
+                eventSuggestions: [],
+                warnings: [],
+                apiStatus: []
+              })
+            }
+          }
+        ]
+      })
+    };
+  };
+
+  try {
+    const generation = await generateItineraryPlan({
+      region: "부산",
+      startDate: "2026-06-27",
+      endDate: "2026-06-28",
+      requests: "부산원아시아페스티벌 공연 중심 여행으로 만들어줘",
+      transportMode: "car"
+    });
+
+    const dinner = generation.items.find((item) => item.title === "광안리 저녁 식사");
+    assert.equal(dinner.startsAt, "2026-06-27T21:30:00+09:00");
+    assert.equal(dinner.endsAt, "2026-06-27T22:30:00+09:00");
+    assert.ok(generation.trip.warnings.some((warning) => /행사 후 이동 여유 보정/.test(warning)));
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv(env);
+  }
+});
+
 function tripItem(start, end, title, placeName, category) {
   return {
     title,
@@ -946,6 +1623,38 @@ function tripItem(start, end, title, placeName, category) {
     travelMinutesBefore: 15,
     category,
     memo: "KTO/Kakao 후보"
+  };
+}
+
+function tripItemForDate(date, start, end, title, placeName, category) {
+  return {
+    title,
+    placeName,
+    address: "경기 고양시",
+    lat: 37.6004,
+    lng: 126.8245,
+    startsAt: `${date}T${start}:00+09:00`,
+    endsAt: `${date}T${end}:00+09:00`,
+    transportMode: "car",
+    travelMinutesBefore: 25,
+    category,
+    memo: "KTO/Kakao 후보"
+  };
+}
+
+function ktoResponse({ totalCount = 0, item = [] } = {}) {
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({
+      response: {
+        header: { resultCode: "0000", resultMsg: "OK" },
+        body: {
+          totalCount,
+          items: { item }
+        }
+      }
+    })
   };
 }
 

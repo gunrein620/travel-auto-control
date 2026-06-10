@@ -8,11 +8,15 @@ let pendingDraft = null;
 let activeDate = null;
 let generationBusy = false;
 let generationError = "";
+let inspectBusy = false;
 let naturalEditBusy = false;
 let draftApplyBusy = false;
 let naturalEditError = "";
 let naturalEditText = "";
 let naturalAddText = "";
+let naturalSessionId = "";
+let naturalChatMessages = [];
+let naturalSlots = {};
 let draftApplyRecommendationId = "";
 let recentlyEditedItemId = null;
 let recentlyEditedTimer = null;
@@ -62,6 +66,7 @@ function render() {
     <main class="shell">
       ${renderHome(activeAlerts.length)}
       ${renderGenerationStatus()}
+      ${renderInspectionStatus()}
 
       ${renderPlannerBoard(days, activeDay)}
 
@@ -113,16 +118,20 @@ function renderNaturalEditChatbot() {
         <div class="chatbot-head">
           <div>
             <p class="eyebrow">AI Schedule Edit</p>
-            <h2>자연어로 일정 수정</h2>
+            <h2>AI 일정 검토 & 수정하기</h2>
           </div>
           <button type="button" class="icon-button" data-action="close-chatbot" aria-label="챗봇 닫기">×</button>
         </div>
         <div class="chatbot-messages">
+          ${renderNaturalSlotSummary()}
           <div class="chat-message assistant">
             <small>Ennoia Agent</small>
-            <p>바꾸고 싶은 일정을 자연어로 말해 주세요. 검토 후 적용 전 초안을 보여드릴게요.</p>
+            <p>바꾸고 싶은 일정등 편하게 물어보세요 바꿔드릴게요.</p>
           </div>
-          <div class="draft-zone" aria-live="polite">${naturalEditBusy ? `<p class="draft pending">${thinkingDots()}<span class="thinking-label">수정안 만드는 중...</span></p>` : pendingDraft ? renderDraft(pendingDraft) : ""}</div>
+          <div class="draft-zone" aria-live="polite">
+            ${naturalChatMessages.map(renderNaturalChatMessage).join("")}
+            ${naturalEditBusy ? `<p class="draft pending">${thinkingDots()}<span class="thinking-label">AI 가 생각중</span></p>` : ""}
+          </div>
         </div>
         ${naturalEditError ? `<p class="natural-error" role="alert">${escapeHtml(naturalEditError)}</p>` : ""}
         <form class="composer chatbot-composer" data-role="natural-form" aria-busy="${naturalEditBusy}">
@@ -145,6 +154,54 @@ function renderNaturalEditChatbot() {
       </button>
     </section>
   `;
+}
+
+function renderNaturalSlotSummary() {
+  const entries = Object.entries(naturalSlots).filter(([, value]) => value !== undefined && value !== null && value !== "");
+  if (entries.length === 0) return "";
+  return `
+    <div class="slot-summary" aria-label="현재 조율 조건">
+      ${entries.map(([key, value]) => `<span>${escapeHtml(slotLabel(key, value))}</span>`).join("")}
+    </div>
+  `;
+}
+
+function renderNaturalChatMessage(message = {}) {
+  const role = message.role === "user" ? "user" : "assistant";
+  if (role === "assistant" && message.draft) return renderDraft(message.draft);
+  return `
+    <div class="chat-message ${role}">
+      <small>${escapeHtml(naturalChatMessageLabel(message, role))}</small>
+      <p>${escapeHtml(message.text || "")}</p>
+    </div>
+  `;
+}
+
+function naturalChatMessageLabel(message = {}, role = "assistant") {
+  if (role === "user") return "나";
+  if (message.source === "ennoia") return "Ennoia Agent";
+  if (message.source === "fallback" || message.source === "agent") return "로컬 플래너 답변";
+  return "Ennoia Agent";
+}
+
+function slotLabel(key, value) {
+  const labels = {
+    cuisine: "음식",
+    headcount: "인원",
+    budget: "예산",
+    mood: "분위기",
+    timeSlot: "시간대",
+    indoorOutdoor: "환경",
+    theme: "테마",
+    duration: "소요",
+    companion: "동행",
+    placeType: "유형",
+    transportMode: "이동",
+    startTime: "출발",
+    endTime: "도착"
+  };
+  const displayValue = Array.isArray(value) ? value.join(", ") : String(value);
+  return `${labels[key] || key}: ${displayValue}`;
 }
 
 function setChatbotOpen(open) {
@@ -242,7 +299,7 @@ function renderPlannerBoard(days, activeDay) {
           <p>${escapeHtml(planRangeLabel())} · ${currentState.plan.items.length}개 일정</p>
         </div>
         <div class="board-head-actions">
-          <button class="primary" data-action="inspect-all">전체 점검</button>
+          <button class="primary" data-action="inspect-all" ${inspectDisabledAttr()}>${inspectActionLabel("전체 점검")}</button>
           <button
             class="icon-button board-toggle"
             data-action="toggle-itinerary"
@@ -275,12 +332,12 @@ function renderHome(alertCount) {
     <section class="home-hero">
       <div class="hero-copy">
         <span class="date-pill">${escapeHtml(source)} 주도형</span>
-        <h2>여행 조건을 넣으면 일정이 타임테이블로 들어오고, 이동 중에는 계속 점검됩니다.</h2>
+        <h2>페스타루트에서 여행 일정을 설계하고, 검토하세요. 이동 중에는 계속 점검됩니다.</h2>
         <p>${escapeHtml(heroSubline(alertCount))}</p>
       </div>
       <div class="hero-actions">
         <button class="primary large" data-action="open-trip" ${generationDisabledAttr()}>${generationActionLabel("AI로 일정 설계하기")}</button>
-        <button class="soft-button large" data-action="inspect-all">현재 일정 점검</button>
+        <button class="soft-button large" data-action="inspect-all" ${inspectDisabledAttr()}>${inspectActionLabel("현재 일정 점검")}</button>
       </div>
     </section>
   `;
@@ -364,6 +421,53 @@ function renderGenerationStatus() {
       </div>
       <div class="api-chips">
         ${apiStatus.map((status) => `<span>${escapeHtml(status)}</span>`).join("")}
+      </div>
+    </section>
+  `;
+}
+
+// Reuses the same busy panel as itinerary generation so inspection feels familiar.
+function renderInspectionStatus() {
+  if (!inspectBusy) return "";
+  const steps = ["날씨·운영시간 확인", "KTO 행사정보 대조", "이동 동선·교통 점검", "주차 여유 확인", "위험 신호 정리"];
+  return `
+    <section class="generation-panel busy" aria-live="polite">
+      <div class="gen-orbs" aria-hidden="true">
+        <span class="gen-orb a"></span>
+        <span class="gen-orb b"></span>
+        <span class="gen-orb c"></span>
+      </div>
+      <div class="gen-busy-inner">
+        <div class="gen-busy-copy">
+          <span class="gen-chip"><span class="gen-chip-dot"></span>Ennoia AI</span>
+          <h2>현재 일정을 점검하는 중이에요</h2>
+          <p>날씨와 운영시간, 행사 정보, 이동 동선과 주차 여유를 실시간 API로 다시 확인하고 있어요.</p>
+          <ul class="gen-track" aria-label="일정 점검 진행 단계">
+            ${steps
+              .map(
+                (label, index) => `
+                  <li style="--i: ${index}">
+                    <span class="gen-track-dot" aria-hidden="true"></span>
+                    ${escapeHtml(label)}
+                  </li>
+                `
+              )
+              .join("")}
+          </ul>
+          <div class="gen-bar" aria-hidden="true"><span></span></div>
+        </div>
+        <div class="gen-skeleton" aria-hidden="true">
+          ${[0, 1, 2]
+            .map(
+              () => `
+                <div class="gen-skel-row">
+                  <span class="gen-skel-time"></span>
+                  <span class="gen-skel-lines"><i></i><i></i></span>
+                </div>
+              `
+            )
+            .join("")}
+        </div>
       </div>
     </section>
   `;
@@ -888,7 +992,13 @@ function renderDraft(draft) {
   const statusLine = draft.modelStatus ? `<small>${escapeHtml(sourceLabel)} · ${escapeHtml(draft.modelStatus)}</small>` : `<small>${escapeHtml(sourceLabel)}</small>`;
   const applyLabel = draftApplyBusy ? `${thinkingDots("solid")}<span>적용 중...</span>` : "플래너에 적용";
   if (draft.needsClarification) {
-    return `<p class="draft">${statusLine}<br />${escapeHtml(draft.question)}</p>`;
+    return `
+      <div class="draft">
+        ${statusLine}
+        <p>${escapeHtml(draft.question)}</p>
+        ${renderDraftChoices(draft)}
+      </div>
+    `;
   }
   const operationLabel = draft.operation === "add" ? "새 일정 추가" : "기존 일정 수정";
   return `
@@ -899,6 +1009,30 @@ function renderDraft(draft) {
       ${draft.resolutionMessage ? `<p class="draft-resolution">${escapeHtml(draft.resolutionMessage)}</p>` : ""}
       ${renderDraftRecommendations(draft)}
       <button type="button" data-action="apply-draft" ${draftApplyBusy ? 'disabled aria-busy="true"' : ""}>${applyLabel}</button>
+    </div>
+  `;
+}
+
+function renderDraftChoices(draft = {}) {
+  const choices = Array.isArray(draft.choices) ? draft.choices : [];
+  if (choices.length === 0) return "";
+  return `
+    <div class="choice-chips" role="list" aria-label="선택지">
+      ${choices
+        .map((choice, index) => {
+          const label = choice.label || choice.value || `선택 ${index + 1}`;
+          const value = choice.value || label;
+          return `
+            <button
+              type="button"
+              data-action="apply-choice"
+              data-value="${escapeHtml(value)}"
+              role="listitem"
+              ${naturalEditBusy ? 'disabled aria-busy="true"' : ""}
+            >${escapeHtml(label)}</button>
+          `;
+        })
+        .join("")}
     </div>
   `;
 }
@@ -1121,11 +1255,12 @@ document.addEventListener("click", async (event) => {
   if (action === "show-manual-add") showManualAddDialog();
   if (action === "show-edit") showEditDialog(id);
   if (action === "inspect") await mutate(`/api/items/${id}/inspect`, {});
-  if (action === "inspect-all") await mutate("/api/inspect/all", {});
+  if (action === "inspect-all" && !inspectBusy) await runInspectAll();
   if (action === "run-due") await mutate(`/api/inspect/due?now=${encodeURIComponent(new Date().toISOString())}`, {});
   if (action === "delete") await remove(`/api/items/${id}`);
   if (action === "apply-notice") await mutate(`/api/notifications/${id}/apply`, {});
   if (action === "dismiss-notice") await mutate(`/api/notifications/${id}/dismiss`, {});
+  if (action === "apply-choice" && !naturalEditBusy) await requestNaturalDraft(button.dataset.value || button.textContent || "", { mode: "update", fromChoice: true });
   if (action === "apply-draft" && pendingDraft && !draftApplyBusy) await applyPendingDraft();
   if (action === "apply-recommendation" && pendingDraft && !draftApplyBusy) await applyPendingDraft(id);
   if (action === "enable-push") await preparePush();
@@ -1148,6 +1283,7 @@ document.addEventListener("submit", async (event) => {
       const result = await api("/api/trips/generate", { method: "POST", body });
       currentState = result.state;
       activeDate = currentState.plan.startDate || currentState.plan.date;
+      resetNaturalEditChat();
     } catch (error) {
       generationError = error.message;
     } finally {
@@ -1207,8 +1343,49 @@ function generationDisabledAttr() {
   return generationBusy ? 'disabled aria-busy="true"' : "";
 }
 
+// Show the same busy panel as itinerary generation, keep it visible for a beat
+// even when the API answers quickly, and avoid a mid-animation re-render: call
+// the API directly, then swap results in with a single render once both resolve.
+async function runInspectAll() {
+  inspectBusy = true;
+  render();
+  scrollGenerationPanelIntoView();
+  const minVisible = new Promise((resolve) => setTimeout(resolve, 1100));
+  try {
+    const [result] = await Promise.all([
+      api("/api/inspect/all", { method: "POST", body: {} }),
+      minVisible
+    ]);
+    currentState = result.state || (await api("/api/state"));
+    ensureActiveDate();
+  } finally {
+    inspectBusy = false;
+    render();
+  }
+}
+
+function inspectActionLabel(label) {
+  return inspectBusy ? "점검 중..." : label;
+}
+
+function inspectDisabledAttr() {
+  return inspectBusy ? 'disabled aria-busy="true"' : "";
+}
+
+function resetNaturalEditChat() {
+  pendingDraft = null;
+  naturalSessionId = "";
+  naturalChatMessages = [];
+  naturalSlots = {};
+  naturalEditError = "";
+  naturalEditText = "";
+  naturalAddText = "";
+  draftApplyRecommendationId = "";
+  draftApplyBusy = false;
+}
+
 function naturalEditSubmitLabel() {
-  return naturalEditBusy ? `${thinkingDots("solid")}<span>수정안 만드는 중...</span>` : "보내기";
+  return "보내기";
 }
 
 // Playful "thinking" dots that replace the old plain spinner during AI edits.
@@ -1282,7 +1459,7 @@ function apiErrorMessage(payload, status) {
 }
 
 async function applyPendingDraft(selectedRecommendationId = "") {
-  const draft = selectedRecommendationId ? { ...pendingDraft, selectedRecommendationId } : pendingDraft;
+  const draft = selectedRecommendationId ? { ...pendingDraft, selectedRecommendationId, sessionId: naturalSessionId } : { ...pendingDraft, sessionId: naturalSessionId };
   draftApplyBusy = true;
   draftApplyRecommendationId = selectedRecommendationId;
   naturalEditError = "";
@@ -1290,8 +1467,12 @@ async function applyPendingDraft(selectedRecommendationId = "") {
   try {
     const result = await mutate("/api/natural-edits/apply", draft);
     pendingDraft = null;
+    naturalSessionId = "";
+    naturalSlots = {};
+    naturalChatMessages.push({ role: "assistant", text: "플래너에 적용했어요." });
     draftApplyBusy = false;
     draftApplyRecommendationId = "";
+    render();
     highlightEditedItem(result.item);
   } catch (error) {
     draftApplyBusy = false;
@@ -1302,35 +1483,55 @@ async function applyPendingDraft(selectedRecommendationId = "") {
 }
 
 async function requestNaturalDraft(text, options = {}) {
+  const userText = String(text || "").trim();
+  chatbotOpen = true;
   naturalEditBusy = true;
   naturalEditError = "";
-  pendingDraft = null;
   draftApplyRecommendationId = "";
+  naturalChatMessages.push({ role: "user", text: userText });
   render();
+  scrollNaturalChatToBottom();
   try {
     const result = await api("/api/natural-edits", {
       method: "POST",
       body: {
-        text,
+        sessionId: naturalSessionId,
+        text: userText,
         mode: options.mode || "update",
         activeDate
       }
     });
-    pendingDraft = result.draft;
+    naturalSessionId = result.sessionId || naturalSessionId;
+    naturalSlots = result.conversation?.slots || result.draft?.filledSlots || naturalSlots;
+    if (result.reply) {
+      naturalChatMessages.push({
+        role: "assistant",
+        text: result.reply.text,
+        source: result.reply.source,
+        modelStatus: result.reply.modelStatus
+      });
+    } else if (result.draft) {
+      pendingDraft = result.draft;
+      naturalChatMessages.push({ role: "assistant", text: naturalDraftText(result.draft), draft: result.draft });
+    }
     if (options.mode === "add_or_update") {
       naturalAddText = "";
     } else {
       naturalEditText = "";
     }
-    return result.draft;
+    return result.draft || null;
   } catch (error) {
     naturalEditError = error.message;
     return null;
   } finally {
     naturalEditBusy = false;
     render();
-    scrollNaturalDraftIntoView();
+    scrollNaturalChatToBottom();
   }
+}
+
+function naturalDraftText(draft = {}) {
+  return draft.question || draft.confirmationMessage || draft.resolutionMessage || "수정 초안을 만들었어요.";
 }
 
 async function mutate(path, body) {
@@ -1396,16 +1597,10 @@ function showManualAddDialog() {
   dialog.showModal();
 }
 
-function scrollNaturalDraftIntoView() {
-  if (!pendingDraft) return;
-  setChatbotOpen(true);
+function scrollNaturalChatToBottom() {
   requestAnimationFrame(() => {
     const messages = document.querySelector(".chatbot-messages");
     if (messages) messages.scrollTo({ top: messages.scrollHeight, behavior: "smooth" });
-    document.querySelector(".draft-zone")?.scrollIntoView({
-      behavior: "smooth",
-      block: "nearest"
-    });
   });
 }
 

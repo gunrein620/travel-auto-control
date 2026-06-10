@@ -24,6 +24,12 @@ const REGION_DEFINITIONS = {
     bounds: { minLat: 37.42, maxLat: 37.7, minLng: 126.76, maxLng: 127.19 },
     addressHints: ["서울 성동구", "서울 종로구", "서울 용산구"]
   },
+  goyang: {
+    region: "고양",
+    center: { lat: 37.6584, lng: 126.832 },
+    bounds: { minLat: 37.56, maxLat: 37.72, minLng: 126.72, maxLng: 126.93 },
+    addressHints: ["경기 고양시 덕양구", "경기 고양시 일산동구", "경기 고양시 일산서구"]
+  },
   daegu: {
     region: "대구",
     center: { lat: 35.8714, lng: 128.6014 },
@@ -209,7 +215,7 @@ function createUnsupportedRegionFallbackTrip(request, modelStatus) {
       evidence: [],
       warnings: normalizeStringList([
         request.resolvedRegion.warning,
-        "지역을 더 구체화해 주세요. v1 지원 지역은 서울, 수원, 부산, 대구, 전주입니다."
+        "지역을 더 구체화해 주세요. v1 지원 지역은 서울, 수원, 고양, 부산, 대구, 전주입니다."
       ])
     },
     items: []
@@ -231,6 +237,7 @@ function resolveTripRegion(inputRegion) {
 
   if (compact.includes("수원")) return buildResolvedRegion("suwon", queryRegion);
   if (compact.includes("서울")) return buildResolvedRegion("seoul", queryRegion);
+  if (compact.includes("고양")) return buildResolvedRegion("goyang", queryRegion);
   if (compact.includes("부산")) return buildResolvedRegion("busan", queryRegion);
   if (compact.includes("대구")) return buildResolvedRegion("daegu", queryRegion);
   if (compact.includes("전주")) return buildResolvedRegion("jeonju", queryRegion);
@@ -243,7 +250,7 @@ function resolveTripRegion(inputRegion) {
     bounds: null,
     addressHints: [],
     ambiguous: true,
-    warning: `${fallbackRegion}은 v1 지원 지역이 아닙니다. 서울, 수원, 부산, 대구, 전주처럼 지역을 더 구체화해 주세요.`
+    warning: `${fallbackRegion}은 v1 지원 지역이 아닙니다. 서울, 수원, 고양, 부산, 대구, 전주처럼 지역을 더 구체화해 주세요.`
   };
 }
 
@@ -352,6 +359,8 @@ function buildFallbackTemplates(request) {
       return busanTemplates();
     case "서울":
       return seoulTemplates();
+    case "고양":
+      return goyangTemplates();
     case "대구":
       return daeguTemplates();
     case "전주":
@@ -566,6 +575,41 @@ function seoulTemplates() {
         item("11:40", "12:40", "진주집 점심", "진주집", "서울 영등포구 국제금융로6길 33", 37.5201, 126.9293, "meal", "식사 대기 시간을 재확인"),
         item("13:10", "14:20", "여의도한강공원 산책", "여의도한강공원", "서울 영등포구 여의동로 330", 37.5284, 126.933, "outdoor", "비나 강풍이면 실내 체류로 전환"),
         item("14:50", "15:40", "IFC몰 교통 정리", "IFC몰", "서울 영등포구 국제금융로 10", 37.5252, 126.9255, "indoor", "귀가 전 교통·짐 정리")
+      ]
+    }
+  ];
+}
+
+function goyangTemplates() {
+  return [
+    {
+      title: "행주산성·행주문화제 권역",
+      theme: "행주산성 역사 산책과 축제장 접근",
+      items: [
+        item("10:00", "12:00", "행주산성 역사 탐방", "행주산성", "경기 고양시 덕양구 행주로15번길 89", 37.5961203, 126.8264702, "outdoor", "행주산성·행주문화제 권역을 여유 있게 시작"),
+        item("12:10", "13:20", "행주산성 먹거리촌 점심", "행주산성먹거리촌", "경기 고양시 덕양구 행주산성로 97", 37.5962592, 126.8261007, "meal", "개별 식당 영업시간과 대기 여부 확인"),
+        item("15:00", "17:20", "행주산성역사공원 산책", "행주산성역사공원", "경기 고양시 덕양구 행주외동 140-8", 37.5982699, 126.8197596, "outdoor", "축제장·야간 관람 동선 사전 확인"),
+        item("17:50", "18:50", "행주산성 카페 휴식", "행주산성 카페 리오리코", "경기 고양시 덕양구 행주산성로 127", 37.5968, 126.8239, "meal", "야간 행사 전 휴식과 간단한 식사 대안")
+      ]
+    },
+    {
+      title: "일산 호수공원·문화시설",
+      theme: "느린 산책과 실내 관람",
+      items: [
+        item("10:00", "11:30", "일산호수공원 산책", "일산호수공원", "경기 고양시 일산동구 호수로 595", 37.662, 126.7666, "outdoor", "비가 강하면 산책 시간을 줄이고 실내로 우회"),
+        item("12:00", "13:00", "포폴로피자 점심", "포폴로피자", "경기 고양시 일산동구 정발산로 43-20", 37.6576, 126.772, "meal", "식당 영업과 웨이팅은 지도 상세 확인"),
+        item("13:30", "15:00", "고양아람누리 관람", "고양아람누리", "경기 고양시 일산동구 중앙로 1286", 37.6617, 126.7746, "indoor", "공연·전시 일정은 당일 재확인"),
+        item("17:30", "18:40", "웨스턴돔 저녁", "웨스턴돔", "경기 고양시 일산동구 정발산로 24", 37.6546, 126.7729, "meal", "식사 선택지가 많은 권역")
+      ]
+    },
+    {
+      title: "삼송·귀가 전 실내 여유",
+      theme: "출발 전 쇼핑·휴식과 교통 정리",
+      items: [
+        item("10:00", "11:30", "스타필드 고양 휴식", "스타필드 고양", "경기 고양시 덕양구 고양대로 1955", 37.647, 126.8958, "indoor", "더운 날·우천 시 안정적인 실내 체류"),
+        item("11:50", "12:50", "스타필드 고양 점심", "이마트 트레이더스 스타필드고양점", "경기 고양시 덕양구 고양대로 1955", 37.647, 126.8958, "meal", "귀가 전 식사와 장보기 결합"),
+        item("13:20", "14:20", "삼송역 교통 정리", "삼송역", "경기 고양시 덕양구 삼송로 194", 37.6531, 126.8956, "indoor", "귀가 교통과 짐 정리"),
+        item("14:40", "15:30", "창릉천 산책", "창릉천", "경기 고양시 덕양구 동산동", 37.6509, 126.906, "outdoor", "날씨가 좋을 때만 짧게 선택")
       ]
     }
   ];

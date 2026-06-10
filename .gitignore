@@ -4,3 +4,5 @@ data/*.json
 .env.*
 !.env.example
 .superpowers/
+node_modules/
+outputs/

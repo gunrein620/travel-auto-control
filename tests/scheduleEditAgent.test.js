@@ -90,6 +90,68 @@ test("draftScheduleEditWithAgent replaces only the first-day lunch meal with a K
   assert.match(draft.confirmationMessage, /연경 차이나타운본점 점심/);
 });
 
+test("draftScheduleEditWithAgent asks meal choices without storing generic meal as a time slot", async () => {
+  const draft = await draftScheduleEditWithAgent({
+    text: "맥도날드 저녁 바꿔줘",
+    items,
+    mode: "update"
+  });
+
+  assert.equal(draft.stage, "clarify");
+  assert.equal(draft.domain, "meal");
+  assert.equal(draft.needsClarification, true);
+  assert.equal(draft.filledSlots.timeSlot, "dinner");
+  assert.equal(draft.choices.some((choice) => choice.label === "한식"), true);
+
+  const genericMealDraft = await draftScheduleEditWithAgent({
+    text: "먹거리 바꿔줘",
+    items,
+    mode: "update"
+  });
+
+  assert.equal(genericMealDraft.stage, "clarify");
+  assert.equal(genericMealDraft.domain, "meal");
+  assert.equal(genericMealDraft.filledSlots.timeSlot, undefined);
+  assert.equal(genericMealDraft.choices.some((choice) => choice.label === "한식"), true);
+});
+
+test("draftScheduleEditWithAgent changes event start time without asking for food or place", async () => {
+  const festivalItems = [
+    ...items,
+    {
+      id: "d2-drone",
+      title: "행주 드론불꽃쇼 관람",
+      placeName: "행주산성역사공원",
+      address: "경기도 고양시 덕양구 행주외동",
+      lat: 37.6006,
+      lng: 126.8247,
+      startsAt: "2026-06-14T20:20:00+09:00",
+      endsAt: "2026-06-14T21:10:00+09:00",
+      transportMode: "walk",
+      travelMinutesBefore: 20,
+      category: "festival",
+      memo: "드론불꽃쇼",
+      status: "unchecked"
+    }
+  ];
+
+  const draft = await draftScheduleEditWithAgent({
+    text: "6월 14일 드론쇼 시작 시간을 20시 40분으로 바꿔줘",
+    items: festivalItems,
+    activeDate: "2026-06-14",
+    mode: "update"
+  });
+
+  assert.equal(draft.needsClarification, false);
+  assert.equal(draft.domain, "time");
+  assert.equal(draft.intent, "change_time");
+  assert.equal(draft.targetItemId, "d2-drone");
+  assert.equal(draft.patch.startsAt, "2026-06-14T20:40:00+09:00");
+  assert.equal(draft.patch.endsAt, "2026-06-14T21:30:00+09:00");
+  assert.equal(draft.choices.length, 0);
+  assert.doesNotMatch(draft.question || "", /음식|장소|무엇으로/);
+});
+
 test("draftScheduleEditWithAgent falls back from a missing exact restaurant to a similar dumpling place", async () => {
   const calls = [];
   const draft = await draftScheduleEditWithAgent({
@@ -221,6 +283,169 @@ test("draftScheduleEditWithAgent returns clickable Kakao recommendations with ap
   assert.equal(draft.recommendations[2].patch.startsAt, "2026-06-28T12:00:00+09:00");
   assert.deepEqual(draft.patch, draft.recommendations[0].patch);
   assert.equal(new Set(draft.recommendations.map((recommendation) => recommendation.id)).size, 3);
+});
+
+test("draftScheduleEditWithAgent replaces a repeated day-two drone show with leisure time", async () => {
+  const festivalItems = [
+    ...items,
+    {
+      id: "d1-drone",
+      title: "행주 드론불꽃쇼 관람",
+      placeName: "행주산성역사공원",
+      address: "경기 고양시 덕양구 행주로15번길 89",
+      lat: 37.6009,
+      lng: 126.8253,
+      startsAt: "2026-06-13T20:20:00+09:00",
+      endsAt: "2026-06-13T21:10:00+09:00",
+      transportMode: "walk",
+      travelMinutesBefore: 20,
+      category: "outdoor",
+      memo: "고양행주문화제 야간 대표 프로그램, 20:35경 시작"
+    },
+    {
+      id: "d2-dinner",
+      title: "브런치 및 여유 쇼핑",
+      placeName: "스타필드 고양",
+      address: "경기 고양시 일산동구 정발산로 24",
+      lat: 37.6553,
+      lng: 126.7728,
+      startsAt: "2026-06-14T10:30:00+09:00",
+      endsAt: "2026-06-14T12:00:00+09:00",
+      transportMode: "walk",
+      travelMinutesBefore: 10,
+      category: "meal",
+      memo: "쇼핑과 식사 선택지가 많은 권역"
+    },
+    {
+      id: "d2-drone",
+      title: "행주 드론불꽃쇼 관람",
+      placeName: "행주산성역사공원",
+      address: "경기 고양시 덕양구 행주로15번길 89",
+      lat: 37.6009,
+      lng: 126.8253,
+      startsAt: "2026-06-14T20:20:00+09:00",
+      endsAt: "2026-06-14T21:10:00+09:00",
+      transportMode: "walk",
+      travelMinutesBefore: 20,
+      category: "outdoor",
+      memo: "고양행주문화제 야간 대표 프로그램, 20:35경 시작"
+    }
+  ];
+
+  const draft = await draftScheduleEditWithAgent({
+    text: "나 day2 에도 연속해서 드론쇼를 보고싶지는 않아",
+    items: festivalItems,
+    mode: "update",
+    activeDate: "2026-06-14"
+  });
+
+  assert.equal(draft.source, "agent");
+  assert.equal(draft.needsClarification, false);
+  assert.equal(draft.targetItemId, "d2-drone");
+  assert.equal(draft.patch.title, "야간 여유 휴식");
+  assert.equal(draft.patch.placeName, "스타필드 고양 주변 휴식");
+  assert.equal(draft.patch.startsAt, "2026-06-14T20:20:00+09:00");
+  assert.equal(draft.patch.category, "indoor");
+  assert.match(draft.resolutionMessage, /제외/);
+});
+
+test("draftScheduleEditWithAgent prefers lunch slot over a shared mall place name", async () => {
+  const gnyItems = [
+    {
+      id: "d1-mall",
+      title: "체크인 및 쇼핑·실내 산책",
+      placeName: "스타필드 고양",
+      address: "경기 고양시 덕양구 고양대로 1955",
+      lat: 37.6467,
+      lng: 126.8955,
+      startsAt: "2026-06-13T11:00:00+09:00",
+      endsAt: "2026-06-13T12:20:00+09:00",
+      transportMode: "walk",
+      travelMinutesBefore: 10,
+      category: "indoor",
+      memo: "도착 후 실내 산책"
+    },
+    {
+      id: "d1-lunch-starfield",
+      title: "점심 식사",
+      placeName: "스타필드 고양",
+      address: "경기 고양시 덕양구 고양대로 1955",
+      lat: 37.6467,
+      lng: 126.8955,
+      startsAt: "2026-06-13T13:00:00+09:00",
+      endsAt: "2026-06-13T14:00:00+09:00",
+      transportMode: "walk",
+      travelMinutesBefore: 10,
+      category: "meal",
+      memo: "푸드코트 또는 식당가"
+    }
+  ];
+
+  const draft = await draftScheduleEditWithAgent({
+    text: "점심 식사 스타필드 말고 다른곳에서 먹고싶어",
+    items: gnyItems,
+    mode: "update",
+    activeDate: "2026-06-13"
+  });
+
+  assert.equal(draft.stage, "clarify");
+  assert.equal(draft.needsClarification, true);
+  assert.equal(draft.targetItemId, "d1-lunch-starfield");
+  assert.match(draft.question, /점심 식사를 무엇으로/);
+  assert.doesNotMatch(draft.question, /체크인/);
+  assert.equal(draft.domain, "meal");
+});
+
+test("draftScheduleEditWithAgent targets an activity schedule by title and active date", async () => {
+  const gnyItems = [
+    {
+      id: "d1-mall",
+      title: "체크인 및 쇼핑·실내 산책",
+      placeName: "스타필드 고양",
+      address: "경기 고양시 덕양구 고양대로 1955",
+      lat: 37.6467,
+      lng: 126.8955,
+      startsAt: "2026-06-13T11:00:00+09:00",
+      endsAt: "2026-06-13T12:20:00+09:00",
+      transportMode: "walk",
+      travelMinutesBefore: 10,
+      category: "indoor",
+      memo: "도착 후 실내 산책"
+    },
+    {
+      id: "d1-walk",
+      title: "행주산성 역사공원 산책 및 축제 입장",
+      placeName: "행주산성 역사공원",
+      address: "경기 고양시 덕양구 행주로15번길 89",
+      lat: 37.6009,
+      lng: 126.8253,
+      startsAt: "2026-06-13T17:00:00+09:00",
+      endsAt: "2026-06-13T18:10:00+09:00",
+      transportMode: "walk",
+      travelMinutesBefore: 20,
+      category: "outdoor",
+      memo: "고양행주문화제 입장 전 야외 산책"
+    }
+  ];
+
+  const draft = await draftScheduleEditWithAgent({
+    text: "산책일정 바꾸고 싶어",
+    items: gnyItems,
+    mode: "update",
+    activeDate: "2026-06-13",
+    searchTouristPlaces: async () => ({
+      source: "kto",
+      status: "empty",
+      items: [],
+      message: "결과 없음"
+    })
+  });
+
+  assert.equal(draft.needsClarification, false);
+  assert.equal(draft.targetItemId, "d1-walk");
+  assert.equal(draft.patch.startsAt, "2026-06-13T17:00:00+09:00");
+  assert.match(draft.patch.title, /야외 관광지|공원|방문/);
+  assert.doesNotMatch(draft.confirmationMessage, /체크인/);
 });
 
 test("draftScheduleEditWithAgent treats explicit add wording as add even when a meal slot exists", async () => {

@@ -26,11 +26,11 @@ test("public demo exposes the Ennoia app handoff", () => {
 });
 
 test("static asset versions are bumped together", () => {
-  assert.match(indexSource, /\/app\/styles\.css\?v=26/);
-  assert.match(indexSource, /\/app\/main\.js\?v=26/);
-  assert.match(serviceWorkerSource, /travel-ops-shell-v17/);
-  assert.match(serviceWorkerSource, /\/app\/main\.js\?v=26/);
-  assert.match(serviceWorkerSource, /\/app\/styles\.css\?v=26/);
+  assert.match(indexSource, /\/app\/styles\.css\?v=37/);
+  assert.match(indexSource, /\/app\/main\.js\?v=37/);
+  assert.match(serviceWorkerSource, /travel-ops-shell-v28/);
+  assert.match(serviceWorkerSource, /\/app\/main\.js\?v=37/);
+  assert.match(serviceWorkerSource, /\/app\/styles\.css\?v=37/);
 });
 
 test("trip generation busy state shows progress stages", () => {
@@ -115,11 +115,26 @@ test("natural edit composer shows loading, live draft, and local errors", () => 
   assert.match(mainSource, /let naturalEditBusy = false/);
   assert.match(mainSource, /let draftApplyBusy = false/);
   assert.match(mainSource, /let naturalEditError = ""/);
-  assert.match(mainSource, /수정안 만드는 중\.\.\./);
+  assert.match(mainSource, /AI 가 생각중/);
   assert.match(mainSource, /thinking-dots/);
   assert.match(stylesSource, /@keyframes thinking-bounce/);
   assert.match(mainSource, /class="draft-zone" aria-live="polite"/);
   assert.match(mainSource, /class="natural-error"/);
+});
+
+test("natural edit submit button does not render a second loading animation", () => {
+  const submitLabelFunction = mainSource.match(/function naturalEditSubmitLabel\(\) \{[\s\S]*?\n\}/)?.[0] || "";
+  assert.match(submitLabelFunction, /return "보내기";/);
+  assert.doesNotMatch(submitLabelFunction, /thinkingDots|naturalEditBusy|AI 가 생각중|수정안 만드는 중/);
+  assert.match(mainSource, /naturalEditBusy \? `<p class="draft pending">/);
+});
+
+test("natural edit chat only scrolls when messages are appended", () => {
+  assert.match(mainSource, /function scrollNaturalChatToBottom/);
+  assert.match(mainSource, /naturalChatMessages\.push\(\{ role: "user", text: userText \}\);\s+render\(\);\s+scrollNaturalChatToBottom\(\);/);
+  assert.match(mainSource, /naturalEditBusy = false;\s+render\(\);\s+scrollNaturalChatToBottom\(\);/);
+  assert.doesNotMatch(mainSource, /function scrollNaturalDraftIntoView/);
+  assert.doesNotMatch(mainSource, /\.draft-zone"\)\?\.scrollIntoView/);
 });
 
 test("natural edit composer lives in a bottom-right chatbot widget", () => {
@@ -136,6 +151,53 @@ test("natural edit composer lives in a bottom-right chatbot widget", () => {
   assert.match(stylesSource, /\.chatbot-panel/);
   assert.match(stylesSource, /\.chatbot-launcher/);
   assert.match(stylesSource, /@media \(max-width: 560px\)[\s\S]*\.chatbot-widget/);
+});
+
+test("natural edit chatbot keeps a session thread with slot summary and choice chips", () => {
+  assert.match(mainSource, /let naturalSessionId = ""/);
+  assert.match(mainSource, /let naturalChatMessages = \[\]/);
+  assert.match(mainSource, /let naturalSlots = \{\}/);
+  assert.match(mainSource, /renderNaturalChatMessage/);
+  assert.match(mainSource, /renderNaturalSlotSummary/);
+  assert.match(mainSource, /renderDraftChoices/);
+  assert.match(mainSource, /data-action="apply-choice"/);
+  assert.match(mainSource, /sessionId: naturalSessionId/);
+  assert.match(mainSource, /naturalChatMessages\.push/);
+  assert.match(stylesSource, /\.slot-summary/);
+  assert.match(stylesSource, /\.choice-chips/);
+  assert.match(stylesSource, /\.chat-message\.user/);
+});
+
+test("trip generation success resets natural edit chat without closing the chatbot", () => {
+  assert.match(mainSource, /function resetNaturalEditChat\(\)/);
+  const resetFunction = mainSource.match(/function resetNaturalEditChat\(\) \{[\s\S]*?\n\}/)?.[0] || "";
+  assert.match(resetFunction, /pendingDraft = null/);
+  assert.match(resetFunction, /naturalSessionId = ""/);
+  assert.match(resetFunction, /naturalChatMessages = \[\]/);
+  assert.match(resetFunction, /naturalSlots = \{\}/);
+  assert.match(resetFunction, /naturalEditError = ""/);
+  assert.match(resetFunction, /naturalEditText = ""/);
+  assert.match(resetFunction, /naturalAddText = ""/);
+  assert.match(resetFunction, /draftApplyRecommendationId = ""/);
+  assert.match(resetFunction, /draftApplyBusy = false/);
+  assert.doesNotMatch(resetFunction, /chatbotOpen/);
+  assert.match(
+    mainSource,
+    /currentState = result\.state;\s+activeDate = currentState\.plan\.startDate \|\| currentState\.plan\.date;\s+resetNaturalEditChat\(\);/
+  );
+  const catchBlock = mainSource.match(/catch \(error\) \{\s+generationError = error\.message;\s+\}/)?.[0] || "";
+  assert.doesNotMatch(catchBlock, /resetNaturalEditChat/);
+});
+
+test("natural edit chatbot renders planner answers as plain assistant messages", () => {
+  assert.match(mainSource, /result\.reply/);
+  assert.match(mainSource, /source: result\.reply\.source/);
+  assert.match(mainSource, /modelStatus: result\.reply\.modelStatus/);
+  assert.match(mainSource, /naturalChatMessageLabel/);
+  assert.match(mainSource, /message\.source === "ennoia"/);
+  assert.match(mainSource, /로컬 플래너 답변/);
+  assert.match(mainSource, /if \(role === "assistant" && message\.draft\) return renderDraft\(message\.draft\);/);
+  assert.doesNotMatch(mainSource, /draft:\s*result\.reply/);
 });
 
 test("natural edit chatbot does not render a page-blocking backdrop", () => {

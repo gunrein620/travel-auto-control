@@ -1804,6 +1804,30 @@ textarea {
   background: var(--paper);
 }
 
+.choice-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.choice-chips button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid rgba(111, 94, 177, 0.18);
+  border-radius: var(--radius-pill);
+  background: var(--paper);
+  color: var(--violet);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.choice-chips button:hover:not(:disabled),
+.choice-chips button:focus-visible {
+  border-color: rgba(111, 94, 177, 0.38);
+  background: rgba(226, 223, 254, 0.45);
+}
+
 .draft-rec-index {
   display: inline-flex;
   align-items: center;
@@ -1937,6 +1961,36 @@ textarea {
   background: var(--paper);
   color: var(--violet);
   box-shadow: 0 1px 2px rgba(60, 49, 91, 0.04);
+}
+
+.chat-message.user {
+  justify-self: end;
+  background: var(--charcoal);
+  color: var(--paper);
+}
+
+.chat-message.user small,
+.chat-message.user p {
+  color: var(--paper);
+}
+
+.slot-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+
+.slot-summary span {
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 9px;
+  border-radius: var(--radius-pill);
+  background: rgba(253, 252, 254, 0.88);
+  color: #6a5fa0;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .chat-message small {

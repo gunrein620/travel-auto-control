@@ -40,6 +40,18 @@ test("normalizeTripRequest recognizes Seoul requests as a schedulable region", (
   assert.ok(request.resolvedRegion.center);
 });
 
+test("normalizeTripRequest recognizes Goyang requests as a schedulable region", () => {
+  const request = normalizeTripRequest({
+    requests: "고양행주문화제 드론불꽃쇼 여유 여행",
+    startDate: "2026-06-13",
+    endDate: "2026-06-15"
+  });
+
+  assert.equal(request.region, "고양");
+  assert.equal(request.resolvedRegion.region, "고양");
+  assert.ok(request.resolvedRegion.center);
+});
+
 test("normalizeTripRequest preserves the public transit transport choice", () => {
   const request = normalizeTripRequest({
     region: "부산시",
@@ -107,7 +119,7 @@ test("normalizeTripRequest resolves broad Jeolla input to Jeonju with a warning"
   assert.match(request.resolvedRegion.warning, /넓은 지역 입력이라 전주 중심으로 구성/);
 });
 
-test("createFallbackTrip uses concrete regional templates for Busan Daegu Jeonju and Seoul", () => {
+test("createFallbackTrip uses concrete regional templates for Busan Daegu Jeonju Seoul and Goyang", () => {
   const cases = [
     {
       region: "부산시",
@@ -136,6 +148,13 @@ test("createFallbackTrip uses concrete regional templates for Busan Daegu Jeonju
       expectedPlaces: ["서울숲", "국립중앙박물관", "광장시장"],
       addressPattern: /^서울 /,
       bounds: { minLat: 37.42, maxLat: 37.7, minLng: 126.76, maxLng: 127.19 }
+    },
+    {
+      region: "고양시",
+      canonical: "고양",
+      expectedPlaces: ["행주산성", "행주산성먹거리촌", "행주산성역사공원"],
+      addressPattern: /^경기 고양시 /,
+      bounds: { minLat: 37.56, maxLat: 37.72, minLng: 126.72, maxLng: 126.93 }
     }
   ];
 

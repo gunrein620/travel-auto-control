@@ -15,13 +15,18 @@ import {
   addItem,
   addNotification,
   addPushSubscription,
+  appendNaturalEditMessage,
   applyNotificationPatch,
+  clearNaturalEditConversation,
   deleteItem,
   dismissNotification,
   findItem,
+  getOrCreateNaturalEditConversation,
   getState,
   recordInspection,
   replacePlanWithGeneratedTrip,
+  summarizeNaturalEditConversation,
+  updateNaturalEditConversation,
   updateItem
 } from "./store.js";
 
@@ -155,11 +160,39 @@ async function handleApi(request, response, url) {
 
   if (request.method === "POST" && url.pathname === "/api/natural-edits") {
     const body = await readJson(request);
-    const draft = await draftNaturalLanguageEditWithEnnoia(body.text || "", getState().plan.items, {
+    const text = String(body.text || "").trim();
+    const state = getState();
+    const conversation = getOrCreateNaturalEditConversation(body.sessionId);
+    appendNaturalEditMessage(conversation.sessionId, { role: "user", text });
+    const conversationBeforeDraft = summarizeNaturalEditConversation(conversation.sessionId);
+    const naturalEditResult = await draftNaturalLanguageEditWithEnnoia(text, state.plan.items, {
       mode: body.mode || "update",
-      activeDate: body.activeDate || getState().plan.date
+      activeDate: body.activeDate || state.plan.date,
+      history: conversationBeforeDraft.messages,
+      slots: conversationBeforeDraft.slots,
+      previousDraft: conversationBeforeDraft.draft
     });
-    sendJson(response, 200, { draft });
+    if (naturalEditResult?.turnType === "answer") {
+      appendNaturalEditMessage(conversation.sessionId, assistantMessageFromReply(naturalEditResult.reply));
+      sendJson(response, 200, {
+        sessionId: conversation.sessionId,
+        reply: naturalEditResult.reply,
+        draft: null,
+        conversation: summarizeNaturalEditConversation(conversation.sessionId)
+      });
+      return;
+    }
+
+    const draft = naturalEditResult?.draft || naturalEditResult;
+    const mergedSlots = mergeNaturalEditSlots(conversationBeforeDraft.slots, draft);
+    const draftWithSession = { ...draft, sessionId: conversation.sessionId };
+    updateNaturalEditConversation(conversation.sessionId, { slots: mergedSlots, draft: draftWithSession });
+    appendNaturalEditMessage(conversation.sessionId, assistantMessageFromDraft(draftWithSession));
+    sendJson(response, 200, {
+      sessionId: conversation.sessionId,
+      draft: draftWithSession,
+      conversation: summarizeNaturalEditConversation(conversation.sessionId)
+    });
     return;
   }
 
@@ -168,12 +201,14 @@ async function handleApi(request, response, url) {
     const patch = selectedNaturalEditPatch(body);
     if (body.operation === "add") {
       const item = addItem(sanitizeNaturalEditPatch(patch, {}));
+      clearNaturalEditConversation(body.sessionId);
       sendJson(response, 201, { operation: "add", item, rechecked: [], state: getState() });
       return;
     }
 
     const target = body.targetItemId ? findItem(body.targetItemId) : null;
     const item = target ? updateItem(target.id, sanitizeNaturalEditPatch(patch, target)) : null;
+    if (item) clearNaturalEditConversation(body.sessionId);
     sendJson(
       response,
       item ? 200 : 404,
@@ -197,6 +232,34 @@ function selectedNaturalEditPatch(draft = {}) {
     ? draft.recommendations.find((recommendation) => recommendation.id === draft.selectedRecommendationId)
     : null;
   return selected?.patch || draft.patch || {};
+}
+
+function mergeNaturalEditSlots(previousSlots = {}, draft = {}) {
+  const filledSlots = draft.filledSlots && typeof draft.filledSlots === "object" ? draft.filledSlots : {};
+  return Object.fromEntries(
+    Object.entries({ ...previousSlots, ...filledSlots }).filter(([, value]) => value !== undefined && value !== null && value !== "")
+  );
+}
+
+function assistantMessageFromDraft(draft = {}) {
+  const status = draft.stage || (draft.needsClarification ? "clarify" : "propose");
+  const text =
+    draft.question ||
+    draft.confirmationMessage ||
+    draft.resolutionMessage ||
+    (status === "clarify" ? "추가 정보가 필요합니다." : "수정 초안을 만들었습니다.");
+  const choices = Array.isArray(draft.choices) && draft.choices.length > 0 ? ` 선택지: ${draft.choices.map((choice) => choice.label).join(", ")}` : "";
+  return {
+    role: "assistant",
+    text: `[${status}] ${text}${choices}`
+  };
+}
+
+function assistantMessageFromReply(reply = {}) {
+  return {
+    role: "assistant",
+    text: reply.text || "현재 플래너 기준으로 답변할 수 있는 정보가 없어요."
+  };
 }
 
 async function inspectAndRecord(itemId) {

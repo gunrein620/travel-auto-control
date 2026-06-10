@@ -6,6 +6,8 @@ import { loadState, saveState } from "./statePersistence.js";
 
 const stateFilePath = process.env.STATE_FILE || new URL("../data/app-state.json", import.meta.url).pathname;
 const state = await loadState(stateFilePath, seedItems);
+const naturalEditConversations = new Map();
+const NATURAL_EDIT_TTL_MS = 30 * 60 * 1000;
 
 export function getState() {
   return {
@@ -139,8 +141,82 @@ export function addPushSubscription(subscription) {
   return saved;
 }
 
+export function getOrCreateNaturalEditConversation(sessionId) {
+  pruneNaturalEditConversations();
+  const existingId = cleanSessionId(sessionId);
+  if (existingId && naturalEditConversations.has(existingId)) {
+    const conversation = naturalEditConversations.get(existingId);
+    conversation.updatedAt = Date.now();
+    return conversation;
+  }
+
+  const id = `natural-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const conversation = { sessionId: id, messages: [], slots: {}, draft: null, updatedAt: Date.now() };
+  naturalEditConversations.set(id, conversation);
+  return conversation;
+}
+
+export function appendNaturalEditMessage(sessionId, message) {
+  const conversation = getOrCreateNaturalEditConversation(sessionId);
+  const normalized = normalizeConversationMessage(message);
+  if (normalized) {
+    conversation.messages.push(normalized);
+    conversation.messages = conversation.messages.slice(-12);
+    conversation.updatedAt = Date.now();
+  }
+  return conversation;
+}
+
+export function updateNaturalEditConversation(sessionId, patch = {}) {
+  const conversation = getOrCreateNaturalEditConversation(sessionId);
+  if (patch.slots && typeof patch.slots === "object") {
+    conversation.slots = { ...conversation.slots, ...patch.slots };
+  }
+  if (patch.draft !== undefined) conversation.draft = patch.draft;
+  conversation.updatedAt = Date.now();
+  return conversation;
+}
+
+export function summarizeNaturalEditConversation(sessionId) {
+  const conversation = getOrCreateNaturalEditConversation(sessionId);
+  return {
+    sessionId: conversation.sessionId,
+    messages: conversation.messages.map((message) => ({ ...message })),
+    slots: { ...conversation.slots },
+    draft: conversation.draft
+  };
+}
+
+export function clearNaturalEditConversation(sessionId) {
+  const id = cleanSessionId(sessionId);
+  if (id) naturalEditConversations.delete(id);
+}
+
 function sortItems() {
   state.plan.items.sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
+}
+
+function normalizeConversationMessage(message = {}) {
+  const role = message.role === "assistant" ? "assistant" : "user";
+  const text = String(message.text || message.content || "").trim();
+  if (!text) return null;
+  return {
+    role,
+    text,
+    createdAt: message.createdAt || new Date().toISOString()
+  };
+}
+
+function pruneNaturalEditConversations(now = Date.now()) {
+  for (const [sessionId, conversation] of naturalEditConversations.entries()) {
+    if (now - conversation.updatedAt > NATURAL_EDIT_TTL_MS) {
+      naturalEditConversations.delete(sessionId);
+    }
+  }
+}
+
+function cleanSessionId(sessionId) {
+  return String(sessionId || "").trim();
 }
 
 function persistState() {

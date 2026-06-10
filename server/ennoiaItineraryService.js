@@ -1,19 +1,21 @@
 import { createFallbackTrip, normalizeGeneratedTrip, normalizeTripRequest } from "../src/domain/generatedTrip.js";
 import { parseBalancedJsonObjects, parseFirstBalancedJsonObject } from "./ennoiaJson.js";
+import { hasFestivalIntent, scoutKtoFestivals } from "./festivalScoutService.js";
 
 export async function generateItineraryPlan(input) {
   const request = normalizeTripRequest(input);
+  const festivalScout = await scoutFestivalsForRequest(request);
   const endpoint = process.env.ENNOIA_TRIP_GENERATION_ENDPOINT || process.env.ENNOIA_NATURAL_EDIT_ENDPOINT;
   const apiKey = process.env.ENNOIA_API_KEY;
   const timeoutMs = normalizeTimeout(process.env.ENNOIA_TRIP_GENERATION_TIMEOUT_MS, 60_000);
 
   if (!endpoint || !apiKey) {
-    return createFallbackTrip(request, "Ennoia 여행관제 판단 엔진 엔드포인트 미설정");
+    return completeGeneratedTrip(createFallbackTrip(request, "Ennoia 여행관제 판단 엔진 엔드포인트 미설정"), request, festivalScout);
   }
 
   const endpointConfig = getEndpointConfig(endpoint);
   if (endpointConfig.type === "preset" && !endpointConfig.hash) {
-    return createFallbackTrip(request, "Ennoia 여행관제 판단 엔진 hash 미설정");
+    return completeGeneratedTrip(createFallbackTrip(request, "Ennoia 여행관제 판단 엔진 hash 미설정"), request, festivalScout);
   }
 
   const controller = new AbortController();
@@ -31,7 +33,7 @@ export async function generateItineraryPlan(input) {
           project: process.env.ENNOIA_PROJECT_ID || "KNTO-PROMPTON-2026-544",
           apiKey
         },
-        body: JSON.stringify(buildEnnoiaTripRequest(request, endpointConfig))
+        body: JSON.stringify(buildEnnoiaTripRequest(request, endpointConfig, festivalScout))
       });
 
       if (response.ok) break;
@@ -50,21 +52,51 @@ export async function generateItineraryPlan(input) {
     const generation = normalizeGeneratedTrip(parsed.trip, request, {
       source: "ennoia",
       modelStatus: parsed.modelStatus,
-      apiStatus: ["Ennoia 여행관제 판단 엔진 응답 수신", ...retryStatuses, ...parsed.apiStatus]
+      apiStatus: ["Ennoia 여행관제 판단 엔진 응답 수신", ...retryStatuses, ...festivalScout.apiStatus, ...parsed.apiStatus]
     });
     if (!generation.trip.apiStatus.some((status) => status.includes("여행관제 판단 엔진"))) {
       generation.trip.apiStatus.unshift("Ennoia 여행관제 판단 엔진 응답 수신");
     }
     generation.trip.apiStatus = limitStringList(generation.trip.apiStatus);
-    return completeGeneratedTrip(generation, request);
+    return completeGeneratedTrip(generation, request, festivalScout);
   } catch (error) {
     if (error.name === "AbortError" || error.name === "EnnoiaStreamTimeoutError") {
-      return createEnnoiaDelayedTrip(request, timeoutMs);
+      return completeGeneratedTrip(createEnnoiaDelayedTrip(request, timeoutMs), request, festivalScout);
     }
-    return createFallbackTrip(request, "Ennoia 여행 생성 호출 오류 · 로컬 안전 일정 구성");
+    return completeGeneratedTrip(createFallbackTrip(request, "Ennoia 여행 생성 호출 오류 · 로컬 안전 일정 구성"), request, festivalScout);
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function scoutFestivalsForRequest(request) {
+  const explicitIntent = hasFestivalIntent(request);
+  if (!explicitIntent && !shouldDiscoverLocalFestivalCandidates(request)) {
+    return { source: "kto", status: "skipped", events: [], apiStatus: [] };
+  }
+  try {
+    const scout = await scoutKtoFestivals(request);
+    return {
+      ...scout,
+      intent: explicitIntent ? "explicit" : "local-date"
+    };
+  } catch (error) {
+    return {
+      source: "kto",
+      status: "error",
+      events: [],
+      apiStatus: [`KTO 행사 스카우트 오류: ${error.message}`]
+    };
+  }
+}
+
+function shouldDiscoverLocalFestivalCandidates(request = {}) {
+  return Boolean(
+    request.startDate &&
+      request.endDate &&
+      (request.region || request.resolvedRegion?.queryRegion || request.resolvedRegion?.region) &&
+      request.resolvedRegion?.region
+  );
 }
 
 function createEnnoiaDelayedTrip(request, timeoutMs) {
@@ -126,8 +158,298 @@ function waitForRetry(ms, signal) {
   });
 }
 
-function completeGeneratedTrip(generation, request) {
-  return extendEarlyEndingDays(completeMissingDays(generation, request), request);
+function completeGeneratedTrip(generation, request, festivalScout = {}) {
+  return repairSameDayTimelineConflicts(
+    applyFestivalScoutToGeneration(extendEarlyEndingDays(completeMissingDays(generation, request), request), request, festivalScout)
+  );
+}
+
+function applyFestivalScoutToGeneration(generation, request, festivalScout = {}) {
+  const events = Array.isArray(festivalScout.events) ? festivalScout.events : [];
+  if (events.length === 0) {
+    generation.trip.apiStatus = limitStringList([...(generation.trip.apiStatus || []), ...(festivalScout.apiStatus || [])]);
+    return generation;
+  }
+
+  generation.trip.eventSuggestions = mergeEventSuggestions(generation.trip.eventSuggestions, events);
+  generation.trip.apiStatus = limitStringList([...(festivalScout.apiStatus || []), ...(generation.trip.apiStatus || [])]);
+
+  const explicitIntent = hasFestivalIntent(request);
+  const autoAttach = !explicitIntent && shouldAutoAttachDiscoveredFestival(request, festivalScout, events);
+  if (!explicitIntent && !autoAttach) return generation;
+
+  const highlights = selectFestivalHighlights(events, request, generation, { autoAttach });
+  if (!highlights.length) return generation;
+
+  const warningUpdates = [];
+  for (const highlight of highlights) {
+    if (alignScheduledHighlight(generation, highlight, events)) {
+      warningUpdates.push(`행사 시간 보정: ${highlight.title}`);
+      continue;
+    }
+
+    if (hasScheduledHighlight(generation, highlight, events)) continue;
+
+    injectFestivalHighlight(generation, request, highlight);
+    warningUpdates.push(`행사 일정 보강: ${highlight.title}`);
+  }
+  warningUpdates.push(...protectPostFestivalBuffers(generation, highlights, events));
+  if (warningUpdates.length) {
+    generation.trip.warnings = limitStringList([...warningUpdates, ...(generation.trip.warnings || [])]);
+  }
+  return generation;
+}
+
+function shouldAutoAttachDiscoveredFestival(request = {}, festivalScout = {}, events = []) {
+  if (festivalScout.intent !== "local-date") return false;
+  if (events.length !== 1) return false;
+  const event = events[0];
+  if (!Array.isArray(event.highlights) || event.highlights.length === 0) return false;
+  return event.highlights.some((highlight) => request.days.includes(highlight.date));
+}
+
+function mergeEventSuggestions(existing = [], events = []) {
+  const seen = new Set();
+  const result = [];
+  for (const event of [...(existing || []), ...events]) {
+    const title = String(event?.title || "").trim();
+    if (!title || seen.has(title)) continue;
+    seen.add(title);
+    result.push({
+      id: String(event.id || event.contentId || event.contentid || `event-${result.length + 1}`).trim(),
+      title,
+      dateRange: event.dateRange || [event.startDate, event.endDate].filter(Boolean).join("~"),
+      area: event.area || event.address || event.placeName || "",
+      reason: event.reason || event.playtime || ""
+    });
+    if (result.length >= 5) break;
+  }
+  return result;
+}
+
+function selectFestivalHighlights(events, request, generation, options = {}) {
+  const requestText = `${request.requests || ""} ${request.interests || ""}`;
+  const highlights = events
+    .flatMap((event) => (event.highlights || []).map((highlight) => ({ ...highlight, eventId: event.id, eventTitle: event.title })))
+    .filter((highlight) => request.days.includes(highlight.date));
+
+  if (!highlights.length) return [];
+  if (options.autoAttach) {
+    const primaryEventId = events[0]?.id;
+    return highlights.filter((highlight) => highlight.eventId === primaryEventId && !hasScheduledHighlight(generation, highlight, events));
+  }
+
+  const requested = highlights
+    .map((highlight) => ({ highlight, score: requestedHighlightScore(highlight, request) }))
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score);
+  if (requested.length) {
+    const bestScore = requested[0].score;
+    const best = requested.filter((entry) => entry.score === bestScore).map((entry) => entry.highlight);
+    if (/드론|불꽃/.test(requestText) && best.some((highlight) => /드론|불꽃/.test(`${highlight.title} ${highlight.memo}`))) {
+      return best.filter((highlight) => /드론|불꽃/.test(`${highlight.title} ${highlight.memo}`));
+    }
+    return [best.find((highlight) => !hasScheduledHighlight(generation, highlight, events)) || best[0]];
+  }
+
+  const direct = highlights.filter((highlight) => {
+    const text = `${highlight.title} ${highlight.memo}`;
+    return (/드론|불꽃/.test(requestText) && /드론|불꽃/.test(text)) || (/공연/.test(requestText) && /공연|쇼/.test(text));
+  });
+  if (direct.length) return direct;
+
+  const unscheduled = highlights.find((highlight) => !hasScheduledHighlight(generation, highlight, events));
+  return [unscheduled || highlights[0]];
+}
+
+function requestedHighlightScore(highlight, request) {
+  const text = compactMatchText(`${highlight.eventTitle || ""} ${highlight.title || ""}`);
+  let score = 0;
+  for (const term of requestedEventTerms(request)) {
+    const compact = compactMatchText(term);
+    if (!compact || compact.length < 3) continue;
+    if (text.includes(compact)) score += compact.length >= 7 ? 120 : 24;
+  }
+  return score;
+}
+
+function requestedEventTerms(request) {
+  const text = `${request.requests || ""} ${request.interests || ""}`;
+  const explicit = text.match(/[가-힣A-Za-z0-9]+(?:문화제|축제|페스티벌|불꽃쇼|드론(?:라이트)?쇼|콘서트|공연|도서전|영화제|음악회|엑스포|박람회|페스타|아트페어|야시장|마켓|전시)/g) || [];
+  const loose = text
+    .split(/[^가-힣A-Za-z0-9]+/)
+    .map((term) => term.trim())
+    .filter((term) => term.length >= 3 && !/^(축제|행사|공연|여행|일정|중심|관람|보고|가고|싶어|만들어줘)$/.test(term));
+  return [...new Set([...explicit, ...loose])];
+}
+
+function compactMatchText(value) {
+  return String(value || "").replace(/\s+/g, "");
+}
+
+function protectPostFestivalBuffers(generation, highlights, events = []) {
+  const warnings = [];
+  for (const highlight of highlights) {
+    const fixedItem = findMatchingHighlightItem(generation, highlight, events);
+    if (!fixedItem?.endsAt) continue;
+    const day = generation.trip.days.find((candidate) => candidate.date === highlight.date);
+    if (!day) continue;
+
+    const dayItems = getDayItems(generation, day).sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
+    const fixedIndex = dayItems.findIndex((item) => item.id === fixedItem.id);
+    if (fixedIndex < 0 || fixedIndex >= dayItems.length - 1) continue;
+
+    const nextItem = dayItems[fixedIndex + 1];
+    const desiredStart = minutesOfDay(fixedItem.endsAt) + Math.max(30, Number(nextItem.travelMinutesBefore) || 25);
+    const nextStart = minutesOfDay(nextItem.startsAt);
+    if (!Number.isFinite(desiredStart) || !Number.isFinite(nextStart) || nextStart >= desiredStart) continue;
+
+    shiftDayItems(dayItems.slice(fixedIndex + 1), desiredStart - nextStart);
+    sortDayItemIds(generation, day);
+    warnings.push(`행사 후 이동 여유 보정: ${fixedItem.title}`);
+  }
+
+  if (warnings.length) generation.items.sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
+  return warnings;
+}
+
+function repairSameDayTimelineConflicts(generation) {
+  const warnings = [];
+  for (const day of generation.trip.days || []) {
+    const dayItems = getDayItems(generation, day).sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
+    let cursor = null;
+    for (const item of dayItems) {
+      const start = minutesOfDay(item.startsAt);
+      const end = minutesOfDay(item.endsAt);
+      if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
+
+      if (Number.isFinite(cursor) && start < cursor) {
+        const smallTravelGap = Math.min(15, Math.max(0, Number(item.travelMinutesBefore) || 0));
+        const desiredStart = Math.min(23 * 60 + 59, cursor + smallTravelGap);
+        const delta = desiredStart - start;
+        item.startsAt = shiftDateTime(item.startsAt, delta);
+        item.endsAt = shiftDateTime(item.endsAt, delta);
+        warnings.push(`겹친 일정 시간 보정: ${item.title}`);
+      }
+      cursor = Math.max(cursor ?? -Infinity, minutesOfDay(item.endsAt));
+    }
+    sortDayItemIds(generation, day);
+  }
+
+  if (warnings.length) {
+    generation.items.sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
+    generation.trip.warnings = limitStringList([...warnings, ...(generation.trip.warnings || [])]);
+  }
+  return generation;
+}
+
+function shiftDayItems(items, deltaMinutes) {
+  for (const item of items) {
+    item.startsAt = shiftDateTime(item.startsAt, deltaMinutes);
+    item.endsAt = shiftDateTime(item.endsAt, deltaMinutes);
+  }
+}
+
+function shiftDateTime(value, deltaMinutes) {
+  const match = String(value || "").match(/^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(:\d{2})?(.*)$/);
+  if (!match) return value;
+  const total = Number(match[2]) * 60 + Number(match[3]) + deltaMinutes;
+  const capped = Math.min(23 * 60 + 59, Math.max(0, total));
+  const hour = Math.floor(capped / 60);
+  const minute = capped % 60;
+  return `${match[1]}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}${match[4] || ":00"}${match[5] || ""}`;
+}
+
+function hasScheduledHighlight(generation, highlight, events = []) {
+  return Boolean(findMatchingHighlightItem(generation, highlight, events));
+}
+
+function alignScheduledHighlight(generation, highlight, events = []) {
+  if (!highlight?.startsAt || !highlight?.endsAt) return false;
+  const item = findMatchingHighlightItem(generation, highlight, events);
+  if (!item) return false;
+  if (item.startsAt === highlight.startsAt && item.endsAt === highlight.endsAt) return false;
+
+  item.title = highlight.title || item.title;
+  item.placeName = highlight.placeName || item.placeName;
+  item.address = highlight.address || item.address || "";
+  item.lat = Number.isFinite(Number(highlight.lat)) ? Number(highlight.lat) : item.lat;
+  item.lng = Number.isFinite(Number(highlight.lng)) ? Number(highlight.lng) : item.lng;
+  item.startsAt = highlight.startsAt;
+  item.endsAt = highlight.endsAt;
+  item.category = highlight.category || item.category || "outdoor";
+  item.memo = highlight.memo
+    ? `${highlight.memo} · KTO 행사 하이라이트 시간대로 보정`
+    : `${item.memo || "KTO 행사정보 기반 일정"} · KTO 행사 하이라이트 시간대로 보정`;
+
+  generation.items.sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
+  for (const day of generation.trip.days || []) {
+    sortDayItemIds(generation, day);
+  }
+  return true;
+}
+
+function findMatchingHighlightItem(generation, highlight, events = []) {
+  const eventTitles = new Set(events.map((event) => event.title).filter(Boolean));
+  const items = (generation.items || []).filter((item) => !highlight.date || String(item.startsAt || "").startsWith(`${highlight.date}T`));
+  const textFor = (item) => `${item.title} ${item.placeName} ${item.memo}`;
+  return (
+    items.find((item) => highlight.title && textFor(item).includes(highlight.title)) ||
+    items.find((item) => /드론|불꽃/.test(highlight.title || "") && /드론|불꽃/.test(textFor(item))) ||
+    items.find((item) => [...eventTitles].some((title) => textFor(item).includes(title)))
+  );
+}
+
+function injectFestivalHighlight(generation, request, highlight) {
+  const existingIds = new Set(generation.items.map((item) => item.id));
+  const id = uniqueId(highlight.id || `festival-highlight-${highlight.date}`, existingIds);
+  const item = {
+    id,
+    title: highlight.title,
+    placeName: highlight.placeName,
+    address: highlight.address || "",
+    lat: Number(highlight.lat),
+    lng: Number(highlight.lng),
+    startsAt: highlight.startsAt,
+    endsAt: highlight.endsAt,
+    transportMode: request.transportMode || "car",
+    travelMinutesBefore: 45,
+    category: highlight.category || "outdoor",
+    memo: highlight.memo || "KTO 행사정보 기반 일정 보강"
+  };
+
+  generation.items.push(item);
+  generation.items.sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
+
+  let day = generation.trip.days.find((candidate) => candidate.date === highlight.date);
+  if (!day) {
+    day = {
+      date: highlight.date,
+      title: `${generation.trip.days.length + 1}일차`,
+      theme: "KTO 행사 일정 보강",
+      itemIds: []
+    };
+    generation.trip.days.push(day);
+    generation.trip.days.sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  if (!day.itemIds.includes(id)) day.itemIds.push(id);
+  sortDayItemIds(generation, day);
+}
+
+function uniqueId(base, existingIds) {
+  const cleaned = String(base || "festival-highlight")
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40) || "festival-highlight";
+  let id = cleaned;
+  let index = 1;
+  while (existingIds.has(id)) {
+    id = `${cleaned}-${index}`;
+    index += 1;
+  }
+  return id;
 }
 
 function completeMissingDays(generation, request) {
@@ -285,7 +607,7 @@ function parseTripResponse(text, request) {
   }
 }
 
-function buildEnnoiaTripRequest(request, endpointConfig) {
+function buildEnnoiaTripRequest(request, endpointConfig, festivalScout = {}) {
   const systemPrompt = [
     "너는 한국관광공사 2026 프롬프톤용 여행관제 판단 엔진이다.",
     "사용자의 여행 조건을 해석하고 KTO 관광정보, KTO 행사정보, Kakao Local, 날씨/현장 변수 근거를 종합해 일정 생성용 구조화 JSON을 만든다.",
@@ -306,6 +628,8 @@ function buildEnnoiaTripRequest(request, endpointConfig) {
       "- request.days의 모든 날짜를 반드시 포함한다.",
       "- 사용자가 requests에 6.23-25 같은 압축 기간을 다시 적었으면 request.startDate/request.endDate와 충돌하지 않는지 확인하고, 답변에는 YYYY-MM-DD로 정리한다.",
       "- request.startDate~request.endDate 기간의 KTO 행사정보를 확인하고, 지역/기간/취향이 맞는 행사는 eventSuggestions에 최대 5개 넣는다.",
+      "- 서버 사전 KTO 행사 스카우트에 events/highlights가 있으면 그 행사는 일정 item에도 반드시 편성한다.",
+      "- 축제/행사/공연 요청에서 highlight.startsAt/endsAt가 제공되면 그 시간대를 우선한다.",
       "- 행사 후보를 일정에 넣지 않는 경우에도 왜 후보인지 reason에 짧게 남긴다.",
       "- 날짜별 items는 오전/점심/오후/저녁 중심 4개 이하로 제한한다.",
       "- 1일 여행과 마지막 날이 아닌 날짜는 오전 관광, 점심, 오후 관광/휴식, 저녁 식사를 모두 포함한다.",
@@ -320,6 +644,7 @@ function buildEnnoiaTripRequest(request, endpointConfig) {
       "- evidence, warnings, apiStatus는 각각 5개 이하, 항목당 60자 이하로 제한한다.",
       "- 전체 응답은 중간에 잘리지 않도록 간결한 JSON 객체 하나로만 반환한다."
     ].join("\n"),
+    festivalScoutForPrompt(festivalScout),
     "반환 스키마:",
     JSON.stringify({
       title: "string",
@@ -376,6 +701,28 @@ function buildEnnoiaTripRequest(request, endpointConfig) {
     ...endpointConfig.ids,
     messages
   };
+}
+
+function festivalScoutForPrompt(festivalScout = {}) {
+  const events = (festivalScout.events || []).map((event) => ({
+    id: event.id,
+    title: event.title,
+    dateRange: event.dateRange,
+    area: event.area,
+    placeName: event.placeName,
+    playtime: event.playtime,
+    reason: event.reason,
+    highlights: (event.highlights || []).map((highlight) => ({
+      title: highlight.title,
+      date: highlight.date,
+      startsAt: highlight.startsAt,
+      endsAt: highlight.endsAt,
+      placeName: highlight.placeName,
+      memo: highlight.memo
+    }))
+  }));
+  if (!events.length) return "서버 사전 KTO 행사 스카우트: 확인된 지역 행사 후보 없음";
+  return `서버 사전 KTO 행사 스카우트:\n${JSON.stringify({ status: festivalScout.status, events }, null, 2)}`;
 }
 
 function getEndpointConfig(endpoint = "") {

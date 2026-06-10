@@ -48,6 +48,7 @@ test(".env.example points trip generation at the stable preset judgment engine",
   );
   assert.match(source, /ENNOIA_PROJECT_ID=KNTO-PROMPTON-2026-544/);
   assert.match(source, /^ENNOIA_API_KEY=$/m);
+  assert.match(source, /^ENNOIA_NATURAL_EDIT_CHAT_WAIT_MS=60000$/m);
   assert.match(source, /^ENNOIA_TRIP_GENERATION_HASH=<tripAgentHash>$/m);
   assert.match(source, /^ENNOIA_TRIP_GENERATION_TIMEOUT_MS=60000$/m);
   assert.doesNotMatch(source, /llm-orchestrator\/chat\/stream\/1ff5980a3d/);
